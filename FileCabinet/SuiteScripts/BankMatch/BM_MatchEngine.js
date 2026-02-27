@@ -296,11 +296,100 @@ define([
         }
     }
 
+    /**
+     * Find all open Sales Invoices for a specific customer.
+     * Used when the user explicitly selects a customer on the match page.
+     *
+     * @param {string|number} customerId  NetSuite internal ID of the customer
+     * @returns {Array}  Open invoices sorted by due date ascending (oldest first)
+     */
+    function findOpenInvoicesByCustomer(customerId) {
+        var results = [];
+        try {
+            search.create({
+                type: 'transaction',
+                filters: [
+                    ['type',   'anyof', 'CustInvc'],      'AND',
+                    ['status', 'anyof', 'CustInvc:Open'], 'AND',
+                    ['entity', 'anyof', String(customerId)]
+                ],
+                columns: [
+                    'internalid', 'tranid', 'trandate', 'duedate',
+                    'amountremaining', 'amount', 'currency', 'memo'
+                ]
+            }).run().each(function (row) {
+                results.push({
+                    nsId:       row.getValue('internalid'),
+                    nsType:     'invoice',
+                    reference:  row.getValue('tranid'),
+                    date:       row.getValue('trandate'),
+                    dueDate:    row.getValue('duedate'),
+                    amount:     parseFloat(row.getValue('amountremaining')) || 0,
+                    origAmount: parseFloat(row.getValue('amount'))          || 0,
+                    currency:   row.getValue('currency'),
+                    memo:       row.getValue('memo')
+                });
+                return results.length < 200;
+            });
+        } catch (e) {
+            log.error('BM_MatchEngine.findOpenInvoicesByCustomer', e.message);
+        }
+        // Oldest due date first so most-overdue invoices appear at the top
+        return results.sort(function (a, b) {
+            var da = a.dueDate ? new Date(a.dueDate) : new Date(a.date);
+            var db = b.dueDate ? new Date(b.dueDate) : new Date(b.date);
+            return da - db;
+        });
+    }
+
+    /**
+     * Find posted Vendor Payments for a specific vendor.
+     * Used for matching bank debits when the user explicitly selects a vendor.
+     *
+     * @param {string|number} vendorId  NetSuite internal ID of the vendor
+     * @returns {Array}  Vendor payments sorted by date descending (most recent first)
+     */
+    function findVendorPaymentsByVendor(vendorId) {
+        var results = [];
+        try {
+            search.create({
+                type: 'transaction',
+                filters: [
+                    ['type',     'anyof', 'VendPymt'], 'AND',
+                    ['entity',   'anyof', String(vendorId)], 'AND',
+                    ['mainline', 'is',    'T']
+                ],
+                columns: [
+                    'internalid', 'tranid', 'trandate',
+                    'amount', 'currency', 'memo'
+                ]
+            }).run().each(function (row) {
+                results.push({
+                    nsId:      row.getValue('internalid'),
+                    nsType:    'vendorpayment',
+                    reference: row.getValue('tranid'),
+                    date:      row.getValue('trandate'),
+                    amount:    parseFloat(row.getValue('amount')) || 0,
+                    currency:  row.getValue('currency'),
+                    memo:      row.getValue('memo')
+                });
+                return results.length < 200;
+            });
+        } catch (e) {
+            log.error('BM_MatchEngine.findVendorPaymentsByVendor', e.message);
+        }
+        return results.sort(function (a, b) {
+            return new Date(b.date) - new Date(a.date);
+        });
+    }
+
     return {
-        findInvoiceMatches:     findInvoiceMatches,
-        findBillPaymentMatches: findBillPaymentMatches,
-        applyCustomerPayment:   applyCustomerPayment,
-        applyBillPayment:       applyBillPayment,
-        notifyApprover:         notifyApprover
+        findInvoiceMatches:         findInvoiceMatches,
+        findBillPaymentMatches:     findBillPaymentMatches,
+        findOpenInvoicesByCustomer: findOpenInvoicesByCustomer,
+        findVendorPaymentsByVendor: findVendorPaymentsByVendor,
+        applyCustomerPayment:       applyCustomerPayment,
+        applyBillPayment:           applyBillPayment,
+        notifyApprover:             notifyApprover
     };
 });

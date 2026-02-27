@@ -299,8 +299,43 @@ define([
             }) });
         });
 
+        // ─ Entity search (customer / vendor picker) ───────────────────────
+        form.addFieldGroup({
+            id:    'grp_entity',
+            label: isCredit
+                ? 'Search by Customer — Find Their Open Invoices'
+                : 'Search by Vendor — Find Their Payments'
+        });
+
+        var entityInfoFld = form.addField({
+            id:        'custpage_entity_info',
+            type:      ui.FieldType.INLINEHTML,
+            label:     ' ',
+            container: 'grp_entity'
+        });
+        entityInfoFld.defaultValue = '<p style="font-size:12px;color:#555;margin:0 0 8px 0;">' + (
+            isCredit
+                ? 'Select a customer to see all their open invoices, then click the one to reconcile with this bank credit.'
+                : 'Select a vendor to see all their payments in NetSuite, then click the one that matches this bank debit.'
+        ) + '</p>';
+
+        var entityFld = form.addField({
+            id:        'custpage_entity_sel',
+            type:      ui.FieldType.SELECT,
+            label:     isCredit ? 'Customer' : 'Vendor',
+            container: 'grp_entity'
+        });
+        entityFld.isMandatory = false;
+        entityFld.source      = isCredit ? 'customer' : 'vendor';
+
+        form.addButton({
+            id:           'btn_find_entity',
+            label:        isCredit ? 'Find Open Invoices' : 'Find Vendor Payments',
+            functionName: 'findEntityRecords'
+        });
+
         // ─ Manual entry ───────────────────────────────────────────────────
-        form.addFieldGroup({ id: 'grp_manual', label: 'Manual Proposal' });
+        form.addFieldGroup({ id: 'grp_manual', label: 'Manual Proposal — Enter NetSuite Record Directly' });
 
         form.addField({ id: 'custpage_m_ns_id', type: ui.FieldType.INTEGER,
             label: isCredit ? 'Invoice Internal ID' : 'Vendor Payment Internal ID',
@@ -337,6 +372,142 @@ define([
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    //  PAGE: Entity match — invoices for a customer / payments for a vendor
+    // ════════════════════════════════════════════════════════════════════════
+    function _renderEntityMatchPage(context, settings, params) {
+        var entityId = params.entity_id || '';
+        var txnType  = params.txn_type  || TT.CUSTOMER_PAYMENT;
+        var isCredit = String(txnType) === String(TT.CUSTOMER_PAYMENT);
+        var bankLine = {
+            id:        params.bankline || '',
+            date:      params.bl_date  || '',
+            amount:    parseFloat(params.bl_amt || 0),
+            reference: params.bl_ref   || ''
+        };
+
+        if (!entityId) {
+            _redirect(context, 'No entity selected. Please choose a customer or vendor first.');
+            return;
+        }
+
+        // Resolve entity display name via search.lookupFields (avoids full record load)
+        var entityName = entityId;
+        try {
+            var lf = search.lookupFields({
+                type:    isCredit ? 'customer' : 'vendor',
+                id:      entityId,
+                columns: ['companyname', 'entityid']
+            });
+            entityName = lf.companyname || lf.entityid || entityId;
+        } catch (e) { /* keep raw ID on error */ }
+
+        // Fetch records for this entity
+        var records = isCredit
+            ? engine.findOpenInvoicesByCustomer(entityId)
+            : engine.findVendorPaymentsByVendor(entityId);
+
+        var amtColor = isCredit ? '#2e7d32' : '#c62828';
+        var pageTitle = isCredit
+            ? 'Open Invoices — ' + entityName
+            : 'Vendor Payments — ' + entityName;
+
+        var form = ui.createForm({ title: pageTitle });
+        form.clientScriptModulePath = './BM_Dashboard_CS.js';
+        form.addButton({ id: 'btn_back', label: '← Back to Match Page', functionName: 'goBack' });
+
+        // ─ Bank line context banner ────────────────────────────────────────
+        var bannerFld = form.addField({ id: 'custpage_em_banner', type: ui.FieldType.INLINEHTML, label: ' ' });
+        bannerFld.defaultValue = [
+            '<div style="background:#f5f5f5;border-left:4px solid #757575;padding:8px 14px;',
+            'border-radius:4px;margin-bottom:8px;font-size:12px;">',
+            '<strong>Bank Line:</strong>&nbsp;&nbsp;',
+            '<strong>' + (bankLine.date || '—') + '</strong>&nbsp;&nbsp;',
+            '<strong style="font-size:14px;color:' + amtColor + ';">',
+            (isCredit ? '+' : '') + bankLine.amount.toFixed(2) + '</strong>',
+            bankLine.reference ? ('&nbsp;&nbsp;Ref:&nbsp;<em>' + bankLine.reference + '</em>') : '',
+            '&nbsp;&nbsp;&mdash;&nbsp;&nbsp;Matching against: <strong>' + entityName + '</strong>',
+            '</div>'
+        ].join('');
+
+        // ─ Records sublist ─────────────────────────────────────────────────
+        var noRecLabel = isCredit ? 'open invoice(s)' : 'vendor payment(s)';
+        var sb = form.addSublist({
+            id:    'sl_entity',
+            type:  ui.SublistType.LIST,
+            label: (records.length ? records.length : 'No') + ' ' + noRecLabel +
+                   ' found — click Select to create a proposal'
+        });
+
+        if (isCredit) {
+            // ── Customer invoices ─────────────────────────────────────────
+            sb.addField({ id: 'em_ref',     type: ui.FieldType.TEXT,     label: 'Invoice #' });
+            sb.addField({ id: 'em_date',    type: ui.FieldType.DATE,     label: 'Invoice Date' });
+            sb.addField({ id: 'em_due',     type: ui.FieldType.DATE,     label: 'Due Date' });
+            sb.addField({ id: 'em_origamt', type: ui.FieldType.CURRENCY, label: 'Invoice Total' });
+            sb.addField({ id: 'em_amount',  type: ui.FieldType.CURRENCY, label: 'Amount Remaining' });
+            sb.addField({ id: 'em_memo',    type: ui.FieldType.TEXT,     label: 'Memo' });
+            sb.addField({ id: 'em_select',  type: ui.FieldType.URL,      label: 'Action' }).linkText = 'Select';
+
+            records.forEach(function (rec, i) {
+                sb.setSublistValue({ id: 'em_ref',     line: i, value: rec.reference  || '—' });
+                sb.setSublistValue({ id: 'em_date',    line: i, value: rec.date       || '' });
+                sb.setSublistValue({ id: 'em_due',     line: i, value: rec.dueDate    || '' });
+                sb.setSublistValue({ id: 'em_origamt', line: i, value: rec.origAmount || 0 });
+                sb.setSublistValue({ id: 'em_amount',  line: i, value: rec.amount     || 0 });
+                sb.setSublistValue({ id: 'em_memo',    line: i, value: rec.memo       || '—' });
+                sb.setSublistValue({ id: 'em_select',  line: i, value: _slUrl({
+                    action:     'create_proposal',
+                    bankline:   bankLine.id,
+                    bl_date:    bankLine.date,
+                    bl_amt:     bankLine.amount,
+                    bl_ref:     bankLine.reference,
+                    ns_id:      rec.nsId,
+                    ns_type:    'invoice',
+                    ns_ref:     rec.reference,
+                    txn_type:   TT.CUSTOMER_PAYMENT,
+                    match_amt:  rec.amount,
+                    match_date: rec.date
+                }) });
+            });
+        } else {
+            // ── Vendor payments ───────────────────────────────────────────
+            sb.addField({ id: 'em_ref',    type: ui.FieldType.TEXT,     label: 'Payment #' });
+            sb.addField({ id: 'em_date',   type: ui.FieldType.DATE,     label: 'Payment Date' });
+            sb.addField({ id: 'em_amount', type: ui.FieldType.CURRENCY, label: 'Amount' });
+            sb.addField({ id: 'em_memo',   type: ui.FieldType.TEXT,     label: 'Memo' });
+            sb.addField({ id: 'em_adjnote',type: ui.FieldType.TEXT,     label: 'Date Adjustment' });
+            sb.addField({ id: 'em_select', type: ui.FieldType.URL,      label: 'Action' }).linkText = 'Select';
+
+            records.forEach(function (rec, i) {
+                // Flag if bank date differs from payment date — proposal will auto-adjust
+                var needsAdj = bankLine.date && rec.date && bankLine.date !== rec.date;
+                sb.setSublistValue({ id: 'em_ref',     line: i, value: rec.reference || '—' });
+                sb.setSublistValue({ id: 'em_date',    line: i, value: rec.date      || '' });
+                sb.setSublistValue({ id: 'em_amount',  line: i, value: rec.amount    || 0 });
+                sb.setSublistValue({ id: 'em_memo',    line: i, value: rec.memo      || '—' });
+                sb.setSublistValue({ id: 'em_adjnote', line: i,
+                    value: needsAdj ? 'Date will be adjusted to ' + bankLine.date : '—' });
+                sb.setSublistValue({ id: 'em_select',  line: i, value: _slUrl({
+                    action:     'create_proposal',
+                    bankline:   bankLine.id,
+                    bl_date:    bankLine.date,
+                    bl_amt:     bankLine.amount,
+                    bl_ref:     bankLine.reference,
+                    ns_id:      rec.nsId,
+                    ns_type:    'vendorpayment',
+                    ns_ref:     rec.reference,
+                    txn_type:   TT.BILL_PAYMENT,
+                    match_amt:  rec.amount,
+                    match_date: rec.date,
+                    adj_date:   needsAdj ? 'T' : 'F'
+                }) });
+            });
+        }
+
+        context.response.writePage(form);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     //  POST/GET: Create proposal
     // ════════════════════════════════════════════════════════════════════════
     function _handleCreateProposal(context, settings) {
@@ -352,7 +523,8 @@ define([
         var nsRef      = p.ns_ref     || p.custpage_m_ns_ref   || '';
         var matchAmt   = parseFloat(p.match_amt  || 0) || bankAmount;
         var matchDate  = p.match_date || bankDate;
-        var adjustDate = p.custpage_adj_date === 'T';
+        // adj_date comes from entity_match GET links; custpage_adj_date from manual form POST
+        var adjustDate = p.custpage_adj_date === 'T' || p.adj_date === 'T';
         var notes      = p.custpage_notes || '';
 
         if (!nsId) {
@@ -431,6 +603,11 @@ define([
 
         if (action === 'match') {
             _renderMatchPage(context, settings, req.parameters);
+            return;
+        }
+
+        if (action === 'entity_match') {
+            _renderEntityMatchPage(context, settings, req.parameters);
             return;
         }
 
