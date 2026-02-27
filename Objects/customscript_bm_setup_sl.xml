@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suitelet scriptid="customscript_bm_setup_sl">
+  <description>Bank Match – Setup / Configuration Page</description>
+  <isinactive>F</isinactive>
+  <name>BM Setup Suitelet</name>
+  <notifyadmins>F</notifyadmins>
+  <notifyemails></notifyemails>
+  <notifygroup></notifygroup>
+  <notifyowner>T</notifyowner>
+  <scriptfile>[/SuiteScripts/BankMatch/BM_Setup_SL.js]</scriptfile>
+  <deploymentmodels>
+    <scriptdeployment scriptid="customdeploy_bm_setup_sl">
+      <allemployees>F</allemployees>
+      <allpartners>F</allpartners>
+      <allroles>T</allroles>
+      <eventtype></eventtype>
+      <isdeployed>T</isdeployed>
+      <isinactive>F</isinactive>
+      <loglevel>DEBUG</loglevel>
+      <runasrole>ADMINISTRATOR</runasrole>
+      <status>RELEASED</status>
+      <title>Bank Match – Setup</title>
+    </scriptdeployment>
+  </deploymentmodels>
+</suitelet>

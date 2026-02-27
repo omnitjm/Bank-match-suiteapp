@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<customlist scriptid="customlist_bm_txn_type">
+  <custvalues>
+    <custvalue scriptid="customvalue_bm_txn_type_1">
+      <isinactive>F</isinactive>
+      <value>Customer Payment</value>
+    </custvalue>
+    <custvalue scriptid="customvalue_bm_txn_type_2">
+      <isinactive>F</isinactive>
+      <value>Bill Payment</value>
+    </custvalue>
+  </custvalues>
+  <description>Transaction type for Bank Match proposals (Customer Payment or Bill Payment)</description>
+  <isordered>F</isordered>
+  <name>BM Transaction Type</name>
+</customlist>

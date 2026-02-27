@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<customrecordtype scriptid="customrecord_bm_proposal">
+  <accesstype>USERROLE</accesstype>
+  <allowattachments>F</allowattachments>
+  <allowinlinedeleting>F</allowinlinedeleting>
+  <allowinlineediting>F</allowinlineediting>
+  <allowquickadd>F</allowquickadd>
+  <allowuiaccess>T</allowuiaccess>
+  <enablekeywords>T</enablekeywords>
+  <enablemailmerge>F</enablemailmerge>
+  <enablenotes>T</enablenotes>
+  <enablenumbering>F</enablenumbering>
+  <fields>
+
+    <!-- ── Bank transaction link ────────────────────────────── -->
+    <customrecordcustomfield scriptid="custrecord_bm_prop_bank_txn">
+      <fieldtype>SELECT</fieldtype>
+      <label>Bank Transaction</label>
+      <selectrecordtype>customrecord_bm_bank_txn</selectrecordtype>
+      <ismandatory>T</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+    </customrecordcustomfield>
+
+    <!-- ── Transaction type (Customer Payment / Bill Payment) ─ -->
+    <customrecordcustomfield scriptid="custrecord_bm_prop_txn_type">
+      <fieldtype>SELECT</fieldtype>
+      <label>Transaction Type</label>
+      <selectrecordtype>customlist_bm_txn_type</selectrecordtype>
+      <ismandatory>T</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+    </customrecordcustomfield>
+
+    <!-- ── NetSuite record details ──────────────────────────── -->
+    <customrecordcustomfield scriptid="custrecord_bm_prop_ns_type">
+      <fieldtype>TEXT</fieldtype>
+      <label>NS Record Type</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Internal NetSuite record type string (e.g. invoice, vendorpayment).</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_prop_ns_id">
+      <fieldtype>INTEGER</fieldtype>
+      <label>NS Record ID</label>
+      <ismandatory>T</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_prop_ns_ref">
+      <fieldtype>TEXT</fieldtype>
+      <label>NS Transaction #</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_prop_match_amt">
+      <fieldtype>CURRENCY</fieldtype>
+      <label>NS Match Amount</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_prop_match_date">
+      <fieldtype>DATE</fieldtype>
+      <label>NS Match Date</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+    </customrecordcustomfield>
+
+    <!-- ── Bank transaction snapshot ───────────────────────── -->
+    <customrecordcustomfield scriptid="custrecord_bm_prop_bank_amt">
+      <fieldtype>CURRENCY</fieldtype>
+      <label>Bank Amount</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_prop_bank_date">
+      <fieldtype>DATE</fieldtype>
+      <label>Bank Date</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_prop_bank_ref">
+      <fieldtype>TEXT</fieldtype>
+      <label>Bank Reference</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+    </customrecordcustomfield>
+
+    <!-- ── Approval & result ────────────────────────────────── -->
+    <customrecordcustomfield scriptid="custrecord_bm_prop_status">
+      <fieldtype>SELECT</fieldtype>
+      <label>Status</label>
+      <selectrecordtype>customlist_bm_prop_status</selectrecordtype>
+      <ismandatory>T</ismandatory>
+      <defaultvalue>1</defaultvalue>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Change to Approved to execute the reconciliation. Change to Rejected to decline.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_prop_approver">
+      <fieldtype>SELECT</fieldtype>
+      <label>Approver</label>
+      <selectrecordtype>-4</selectrecordtype>
+      <ismandatory>F</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+    </customrecordcustomfield>
+
+    <!-- ── Bill Payment date adjustment ────────────────────── -->
+    <customrecordcustomfield scriptid="custrecord_bm_prop_adj_date">
+      <fieldtype>CHECKBOX</fieldtype>
+      <label>Adjust Payment Date in NetSuite</label>
+      <ismandatory>F</ismandatory>
+      <defaultchecked>F</defaultchecked>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>When checked (Bill Payment only), the Vendor Payment trandate will be updated to match the Bank Date on approval.</helptext>
+    </customrecordcustomfield>
+
+    <!-- ── Notes & result tracking ──────────────────────────── -->
+    <customrecordcustomfield scriptid="custrecord_bm_prop_notes">
+      <fieldtype>TEXTAREA</fieldtype>
+      <label>Notes</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_prop_applied_dt">
+      <fieldtype>DATE</fieldtype>
+      <label>Applied Date</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_prop_error_msg">
+      <fieldtype>TEXTAREA</fieldtype>
+      <label>Error Message</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+    </customrecordcustomfield>
+
+  </fields>
+  <hierarchytype>NONE</hierarchytype>
+  <isinactive>F</isinactive>
+  <isordered>F</isordered>
+  <name>BM Match Proposal</name>
+  <recordname>Match Proposal</recordname>
+  <showcreationdate>T</showcreationdate>
+  <showlastmodified>T</showlastmodified>
+  <showowner>T</showowner>
+  <showpermissions>F</showpermissions>
+</customrecordtype>

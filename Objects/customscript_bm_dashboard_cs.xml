@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<clientscript scriptid="customscript_bm_dashboard_cs">
+  <description>Bank Match – Dashboard client script</description>
+  <isinactive>F</isinactive>
+  <name>BM Dashboard Client Script</name>
+  <notifyadmins>F</notifyadmins>
+  <notifyemails></notifyemails>
+  <notifygroup></notifygroup>
+  <notifyowner>T</notifyowner>
+  <scriptfile>[/SuiteScripts/BankMatch/BM_Dashboard_CS.js]</scriptfile>
+  <deploymentmodels>
+    <scriptdeployment scriptid="customdeploy_bm_dashboard_cs">
+      <allemployees>F</allemployees>
+      <allpartners>F</allpartners>
+      <allroles>T</allroles>
+      <eventtype></eventtype>
+      <isdeployed>T</isdeployed>
+      <isinactive>F</isinactive>
+      <loglevel>DEBUG</loglevel>
+      <status>RELEASED</status>
+      <title>BM Dashboard CS</title>
+    </scriptdeployment>
+  </deploymentmodels>
+</clientscript>

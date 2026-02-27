@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<customrecordtype scriptid="customrecord_bm_settings">
+  <accesstype>USERROLE</accesstype>
+  <allowattachments>F</allowattachments>
+  <allowinlinedeleting>F</allowinlinedeleting>
+  <allowinlineediting>T</allowinlineediting>
+  <allowquickadd>F</allowquickadd>
+  <allowuiaccess>T</allowuiaccess>
+  <enablekeywords>F</enablekeywords>
+  <enablemailmerge>F</enablemailmerge>
+  <enablenotes>F</enablenotes>
+  <enablenumbering>F</enablenumbering>
+  <fields>
+
+    <customrecordcustomfield scriptid="custrecord_bm_bank_account">
+      <fieldtype>SELECT</fieldtype>
+      <label>Bank Account</label>
+      <selectrecordtype>-10</selectrecordtype>
+      <ismandatory>T</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>The GL bank account used for reconciliation.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_subsidiary">
+      <fieldtype>SELECT</fieldtype>
+      <label>Subsidiary</label>
+      <selectrecordtype>-117</selectrecordtype>
+      <ismandatory>F</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Limit matching to this subsidiary. Leave blank for all subsidiaries.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_tolerance_amt">
+      <fieldtype>CURRENCY</fieldtype>
+      <label>Amount Tolerance</label>
+      <ismandatory>F</ismandatory>
+      <defaultvalue>0.01</defaultvalue>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Maximum allowed amount difference when auto-matching.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_tolerance_days">
+      <fieldtype>INTEGER</fieldtype>
+      <label>Date Tolerance (days)</label>
+      <ismandatory>F</ismandatory>
+      <defaultvalue>5</defaultvalue>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Maximum number of days between bank date and NetSuite date for auto-matching.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_approver">
+      <fieldtype>SELECT</fieldtype>
+      <label>Approver</label>
+      <selectrecordtype>-4</selectrecordtype>
+      <ismandatory>T</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Employee who must approve all reconciliation proposals before they are applied.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_notify_email">
+      <fieldtype>EMAIL</fieldtype>
+      <label>Notification Email</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Override email for approval notifications. Defaults to the approver employee's email.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_auto_suggest">
+      <fieldtype>CHECKBOX</fieldtype>
+      <label>Auto-suggest Matches on Import</label>
+      <ismandatory>F</ismandatory>
+      <defaultchecked>T</defaultchecked>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>When enabled, the best match candidate is automatically proposed when bank lines are imported (still requires approval).</helptext>
+    </customrecordcustomfield>
+
+  </fields>
+  <hierarchytype>NONE</hierarchytype>
+  <isinactive>F</isinactive>
+  <isordered>F</isordered>
+  <name>BM App Settings</name>
+  <recordname>Settings</recordname>
+  <showcreationdate>F</showcreationdate>
+  <showlastmodified>T</showlastmodified>
+  <showowner>F</showowner>
+  <showpermissions>F</showpermissions>
+</customrecordtype>

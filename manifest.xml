@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest projecttype="ACCOUNTCUSTOMIZATION">
+  <projectname>Bank Match SuiteApp</projectname>
+  <frameworkversion>1.0</frameworkversion>
+  <!--
+    Bank Match SuiteApp
+    ═══════════════════
+    Reconcile customer payments to open sales invoices and vendor bill payments,
+    with an approval gate before any transaction is posted.
+
+    Features:
+      • Import bank statement lines from CSV
+      • Auto-suggest matches (invoice or vendor payment) based on amount/date/reference scoring
+      • Always-required approval workflow (approver reviews and approves/rejects proposals)
+      • Customer Payment → open Invoice: creates a Customer Payment record in NetSuite
+      • Bill Payment → Vendor Payment: optionally adjusts the payment date to match the bank date
+      • Simple setup page for bank account, tolerances and approver
+  -->
+  <files>
+    <file path="FileCabinet/SuiteScripts/BankMatch/BM_Constants.js"/>
+    <file path="FileCabinet/SuiteScripts/BankMatch/BM_MatchEngine.js"/>
+    <file path="FileCabinet/SuiteScripts/BankMatch/BM_Setup_SL.js"/>
+    <file path="FileCabinet/SuiteScripts/BankMatch/BM_Setup_CS.js"/>
+    <file path="FileCabinet/SuiteScripts/BankMatch/BM_Main_SL.js"/>
+    <file path="FileCabinet/SuiteScripts/BankMatch/BM_Dashboard_CS.js"/>
+    <file path="FileCabinet/SuiteScripts/BankMatch/BM_Proposal_UE.js"/>
+  </files>
+  <objects>
+    <!-- Custom Lists -->
+    <object path="Objects/customlist_bm_prop_status.xml"/>
+    <object path="Objects/customlist_bm_txn_status.xml"/>
+    <object path="Objects/customlist_bm_txn_type.xml"/>
+    <!-- Custom Records -->
+    <object path="Objects/customrecord_bm_settings.xml"/>
+    <object path="Objects/customrecord_bm_bank_txn.xml"/>
+    <object path="Objects/customrecord_bm_proposal.xml"/>
+    <!-- Scripts -->
+    <object path="Objects/customscript_bm_setup_sl.xml"/>
+    <object path="Objects/customscript_bm_setup_cs.xml"/>
+    <object path="Objects/customscript_bm_main_sl.xml"/>
+    <object path="Objects/customscript_bm_dashboard_cs.xml"/>
+    <object path="Objects/customscript_bm_proposal_ue.xml"/>
+  </objects>
+</manifest>

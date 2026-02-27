@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<usereventscript scriptid="customscript_bm_proposal_ue">
+  <description>Bank Match – Executes reconciliation when a proposal is approved</description>
+  <isinactive>F</isinactive>
+  <name>BM Proposal User Event</name>
+  <notifyadmins>F</notifyadmins>
+  <notifyemails></notifyemails>
+  <notifygroup></notifygroup>
+  <notifyowner>T</notifyowner>
+  <scriptfile>[/SuiteScripts/BankMatch/BM_Proposal_UE.js]</scriptfile>
+  <deploymentmodels>
+    <scriptdeployment scriptid="customdeploy_bm_proposal_ue">
+      <allemployees>F</allemployees>
+      <allpartners>F</allpartners>
+      <allroles>T</allroles>
+      <eventtype>EDIT</eventtype>
+      <isdeployed>T</isdeployed>
+      <isinactive>F</isinactive>
+      <loglevel>DEBUG</loglevel>
+      <recordtype>customrecord_bm_proposal</recordtype>
+      <runasrole>ADMINISTRATOR</runasrole>
+      <status>RELEASED</status>
+      <title>BM Proposal – Execute on Approval</title>
+    </scriptdeployment>
+  </deploymentmodels>
+</usereventscript>
