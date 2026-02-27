@@ -172,6 +172,17 @@
       <encryptatrest>F</encryptatrest>
     </customrecordcustomfield>
 
+    <!-- ── Native bank line reference ──────────────────────────────────── -->
+    <customrecordcustomfield scriptid="custrecord_bm_prop_bank_line">
+      <fieldtype>TEXT</fieldtype>
+      <label>Native Bank Line ID</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Internal ID of the bank statement line from NetSuite's native Match Bank Data module.</helptext>
+    </customrecordcustomfield>
+
   </fields>
   <hierarchytype>NONE</hierarchytype>
   <isinactive>F</isinactive>

@@ -57,7 +57,8 @@ define([], function () {
             ERROR_MSG:     'custrecord_bm_prop_error_msg',  // TEXTAREA
             BANK_AMOUNT:   'custrecord_bm_prop_bank_amt',   // CURRENCY
             BANK_DATE:     'custrecord_bm_prop_bank_date',  // DATE
-            BANK_REF:      'custrecord_bm_prop_bank_ref'    // TEXT
+            BANK_REF:      'custrecord_bm_prop_bank_ref',   // TEXT
+            BANK_LINE_ID:  'custrecord_bm_prop_bank_line'   // TEXT – native bank line ID
         },
 
         // ── Proposal Status List Values ───────────────────────────────────────
@@ -85,10 +86,12 @@ define([], function () {
 
         // ── Script / Deployment IDs ──────────────────────────────────────────
         SCRIPTS: {
-            MAIN_SL:      'customscript_bm_main_sl',
-            MAIN_DEPLOY:  'customdeploy_bm_main_sl',
-            SETUP_SL:     'customscript_bm_setup_sl',
-            SETUP_DEPLOY: 'customdeploy_bm_setup_sl'
+            MAIN_SL:        'customscript_bm_main_sl',
+            MAIN_DEPLOY:    'customdeploy_bm_main_sl',
+            SETUP_SL:       'customscript_bm_setup_sl',
+            SETUP_DEPLOY:   'customdeploy_bm_setup_sl',
+            RECONCILE_RL:   'customscript_bm_reconcile_rl',
+            RECONCILE_DEPLOY: 'customdeploy_bm_reconcile_rl'
         }
     };
 });

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<restlet scriptid="customscript_bm_reconcile_rl">
+  <description>Bank Match – RESTlet called by the native Match Bank Data button to auto-propose matches</description>
+  <isinactive>F</isinactive>
+  <name>BM Reconcile RESTlet</name>
+  <notifyadmins>F</notifyadmins>
+  <notifyemails></notifyemails>
+  <notifygroup></notifygroup>
+  <notifyowner>T</notifyowner>
+  <scriptfile>[/SuiteScripts/BankMatch/BM_Reconcile_RL.js]</scriptfile>
+  <deploymentmodels>
+    <scriptdeployment scriptid="customdeploy_bm_reconcile_rl">
+      <allemployees>F</allemployees>
+      <allpartners>F</allpartners>
+      <allroles>T</allroles>
+      <eventtype></eventtype>
+      <isdeployed>T</isdeployed>
+      <isinactive>F</isinactive>
+      <loglevel>DEBUG</loglevel>
+      <runasrole>ADMINISTRATOR</runasrole>
+      <status>RELEASED</status>
+      <title>BM Reconcile RESTlet</title>
+    </scriptdeployment>
+  </deploymentmodels>
+</restlet>

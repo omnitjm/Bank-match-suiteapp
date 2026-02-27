@@ -5,20 +5,38 @@
   <!--
     Bank Match SuiteApp
     ═══════════════════
-    Reconcile customer payments to open sales invoices and vendor bill payments,
-    with an approval gate before any transaction is posted.
+    Sits on top of NetSuite's native "Match Bank Data" module.
+    The native module handles bank statement import (Phase 1).
+    This SuiteApp automates the reconciliation (Phase 2):
 
-    Features:
-      • Import bank statement lines from CSV
-      • Auto-suggest matches (invoice or vendor payment) based on amount/date/reference scoring
-      • Always-required approval workflow (approver reviews and approves/rejects proposals)
-      • Customer Payment → open Invoice: creates a Customer Payment record in NetSuite
-      • Bill Payment → Vendor Payment: optionally adjusts the payment date to match the bank date
-      • Simple setup page for bank account, tolerances and approver
+      • Injects an "Auto-Reconcile" button bar directly into the native Match Bank Data page
+      • Auto-scores and proposes matches (Customer Payments → Invoices, Vendor Payments)
+      • Mandatory approval workflow – every proposal needs sign-off before execution
+      • Bill Payment date adjustment – aligns NetSuite payment date to bank date
+      • After approval, applied transactions appear in Match Bank Data for final submission
+
+    File overview
+    ─────────────
+    BM_Constants.js     – all field IDs, status codes, record type IDs
+    BM_MatchEngine.js   – scoring, findInvoiceMatches, findBillPaymentMatches,
+                          applyCustomerPayment, applyBillPayment, notifyApprover
+    BM_BankLineReader.js – reads unmatched bank lines from native module (SuiteQL/search)
+    BM_NativeBridge.js  – OFX generator + native module URL helpers
+    BM_NativePage_CS.js – GLOBAL client script: injects button bar into Match Bank Data page
+    BM_Reconcile_RL.js  – RESTlet: called by button to auto-propose all matches
+    BM_Setup_SL.js      – settings suitelet
+    BM_Setup_CS.js      – settings client script
+    BM_Main_SL.js       – approval dashboard (pending + history)
+    BM_Dashboard_CS.js  – dashboard client script
+    BM_Proposal_UE.js   – user event: fires reconciliation when proposal approved
   -->
   <files>
     <file path="FileCabinet/SuiteScripts/BankMatch/BM_Constants.js"/>
     <file path="FileCabinet/SuiteScripts/BankMatch/BM_MatchEngine.js"/>
+    <file path="FileCabinet/SuiteScripts/BankMatch/BM_BankLineReader.js"/>
+    <file path="FileCabinet/SuiteScripts/BankMatch/BM_NativeBridge.js"/>
+    <file path="FileCabinet/SuiteScripts/BankMatch/BM_NativePage_CS.js"/>
+    <file path="FileCabinet/SuiteScripts/BankMatch/BM_Reconcile_RL.js"/>
     <file path="FileCabinet/SuiteScripts/BankMatch/BM_Setup_SL.js"/>
     <file path="FileCabinet/SuiteScripts/BankMatch/BM_Setup_CS.js"/>
     <file path="FileCabinet/SuiteScripts/BankMatch/BM_Main_SL.js"/>
@@ -34,7 +52,9 @@
     <object path="Objects/customrecord_bm_settings.xml"/>
     <object path="Objects/customrecord_bm_bank_txn.xml"/>
     <object path="Objects/customrecord_bm_proposal.xml"/>
-    <!-- Scripts -->
+    <!-- Scripts & Deployments -->
+    <object path="Objects/customscript_bm_native_cs.xml"/>
+    <object path="Objects/customscript_bm_reconcile_rl.xml"/>
     <object path="Objects/customscript_bm_setup_sl.xml"/>
     <object path="Objects/customscript_bm_setup_cs.xml"/>
     <object path="Objects/customscript_bm_main_sl.xml"/>

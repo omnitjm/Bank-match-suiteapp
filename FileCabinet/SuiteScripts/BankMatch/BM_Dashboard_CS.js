@@ -4,24 +4,19 @@
  * @NModuleScope SameAccount
  * @NScriptType ClientScript
  *
- * Client-side logic for the main Bank Match dashboard.
+ * Client-side logic for the Bank Match dashboard and match-selection pages.
  */
-define(['N/url', 'N/currentRecord'], function (url, currentRecord) {
+define(['N/url'], function (url) {
     'use strict';
 
-    function pageInit(context) {
-        // Highlight the "Pending Approvals" tab if there are pending items
+    function pageInit() { /* no init needed */ }
+
+    /** Open the native Match Bank Data page in a new tab */
+    function goNative() {
+        window.open('/app/accounting/transactions/bank/reconciliation/matchbankdata.nl', '_blank');
     }
 
-    function goImport() {
-        window.location.href = url.resolveScript({
-            scriptId:          'customscript_bm_main_sl',
-            deploymentId:      'customdeploy_bm_main_sl',
-            params:            { action: 'import' },
-            returnExternalUrl: false
-        });
-    }
-
+    /** Open the Bank Match settings page */
     function goSetup() {
         window.location.href = url.resolveScript({
             scriptId:          'customscript_bm_setup_sl',
@@ -30,14 +25,8 @@ define(['N/url', 'N/currentRecord'], function (url, currentRecord) {
         });
     }
 
-    function goBack() {
-        window.history.back();
-    }
+    /** Navigate back */
+    function goBack() { window.history.back(); }
 
-    return {
-        pageInit:  pageInit,
-        goImport:  goImport,
-        goSetup:   goSetup,
-        goBack:    goBack
-    };
+    return { pageInit: pageInit, goNative: goNative, goSetup: goSetup, goBack: goBack };
 });

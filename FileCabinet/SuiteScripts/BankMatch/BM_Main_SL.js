@@ -4,38 +4,50 @@
  * @NModuleScope SameAccount
  * @NScriptType Suitelet
  *
- * Bank Match – Main Reconciliation Dashboard
+ * Bank Match – Reconciliation Automation Dashboard
  *
- * Routes (via ?action=...):
- *   (none)           GET  → Dashboard with tabs: Bank Transactions | Import | Pending | History
- *   match            GET  → Match-selection page for one bank transaction
- *   import_csv       POST → Parse CSV and create bank transaction records
- *   create_proposal  POST → Create a match proposal (always Pending Approval)
- *   exclude          POST → Mark a bank transaction as Excluded
+ * ─── Positioning (Phase 2) ───────────────────────────────────────────────────
+ * Bank Match starts at Phase 2.  Bank statement data is already in NetSuite,
+ * imported via the native "Match Bank Data" module.
+ *
+ * Our buttons appear directly on the native Match Bank Data page (injected by
+ * BM_NativePage_CS.js).  This Suitelet is the supporting dashboard opened
+ * from those buttons for:
+ *   • Reviewing and approving pending proposals
+ *   • Proposing a match manually for one specific bank line
+ *   • Viewing reconciliation history
+ *   • Quick link to settings
+ *
+ * ─── Routes ──────────────────────────────────────────────────────────────────
+ *   (none)           GET  → Dashboard (pending approvals + history)
+ *   match            GET  → Match-selection page for one bank line
+ *   create_proposal  GET/POST → Create a proposal and redirect
  */
 define([
     'N/ui/serverWidget',
-    'N/ui/message',
     'N/record',
     'N/search',
-    'N/file',
     'N/url',
-    'N/email',
-    'N/runtime',
     'N/log',
     './BM_Constants',
-    './BM_MatchEngine'
-], function (ui, uiMsg, record, search, file, url, email, runtime, log, C, engine) {
+    './BM_MatchEngine',
+    './BM_BankLineReader',
+    './BM_NativeBridge'
+], function (ui, record, search, url, log, C, engine, reader, bridge) {
     'use strict';
 
-    var SF  = C.SETTINGS_FIELDS;
-    var BTF = C.BANK_TXN_FIELDS;
-    var PF  = C.PROPOSAL_FIELDS;
-    var PS  = C.PROPOSAL_STATUS;
-    var TS  = C.TXN_STATUS;
-    var TT  = C.TXN_TYPE;
+    var SF = C.SETTINGS_FIELDS;
+    var PF = C.PROPOSAL_FIELDS;
+    var PS = C.PROPOSAL_STATUS;
+    var TT = C.TXN_TYPE;
 
-    // ── Settings helper ───────────────────────────────────────────────────
+    var TYPE_LABELS = { '1': 'Customer Payment', '2': 'Bill Payment' };
+    var PROP_LABELS = {
+        '1': 'Pending Approval', '2': 'Approved',
+        '3': 'Rejected',         '4': 'Applied',  '5': 'Failed'
+    };
+
+    // ── Settings ──────────────────────────────────────────────────────────
     function _getSettings() {
         var rows = search.create({
             type: C.RECORDS.SETTINGS,
@@ -43,55 +55,24 @@ define([
             columns: Object.values(SF)
         }).run().getRange({ start: 0, end: 1 });
 
-        if (!rows || rows.length === 0) return null;
-        var row = rows[0];
+        if (!rows || !rows.length) return null;
+        var r = rows[0];
         return {
-            id:          row.id,
-            bankAccount: row.getValue(SF.BANK_ACCOUNT),
-            subsidiary:  row.getValue(SF.SUBSIDIARY),
-            tolAmt:      parseFloat(row.getValue(SF.TOLERANCE_AMT))  || 0.01,
-            tolDays:     parseInt(row.getValue(SF.TOLERANCE_DAYS), 10) || 5,
-            approver:    row.getValue(SF.APPROVER),
-            notifyEmail: row.getValue(SF.NOTIFY_EMAIL),
-            autoSuggest: row.getValue(SF.AUTO_SUGGEST) === 'T'
+            id:          r.id,
+            bankAccount: r.getValue(SF.BANK_ACCOUNT),
+            subsidiary:  r.getValue(SF.SUBSIDIARY),
+            tolAmt:      parseFloat(r.getValue(SF.TOLERANCE_AMT))   || 0.01,
+            tolDays:     parseInt(r.getValue(SF.TOLERANCE_DAYS), 10) || 5,
+            approver:    r.getValue(SF.APPROVER),
+            notifyEmail: r.getValue(SF.NOTIFY_EMAIL),
+            autoSuggest: r.getValue(SF.AUTO_SUGGEST) === 'T'
         };
-    }
-
-    // ── Bank transactions search ──────────────────────────────────────────
-    function _getBankTxns(statusFilter) {
-        var filters = [['isinactive', 'is', 'F']];
-        if (statusFilter) {
-            filters.push('AND');
-            filters.push([BTF.STATUS, 'anyof', statusFilter]);
-        }
-        var results = [];
-        search.create({
-            type: C.RECORDS.BANK_TXN,
-            filters: filters,
-            columns: [
-                'internalid', 'name',
-                BTF.TXN_DATE, BTF.DESCRIPTION, BTF.AMOUNT,
-                BTF.REFERENCE, BTF.CURRENCY, BTF.STATUS
-            ]
-        }).run().each(function (row) {
-            results.push({
-                id:          row.id,
-                date:        row.getValue(BTF.TXN_DATE),
-                description: row.getValue(BTF.DESCRIPTION),
-                amount:      row.getValue(BTF.AMOUNT),
-                reference:   row.getValue(BTF.REFERENCE),
-                currency:    row.getValue(BTF.CURRENCY),
-                status:      row.getValue(BTF.STATUS)
-            });
-            return results.length < 200;
-        });
-        return results;
     }
 
     // ── Proposals search ──────────────────────────────────────────────────
     function _getProposals(statusFilter) {
         var filters = [['isinactive', 'is', 'F']];
-        if (statusFilter) {
+        if (statusFilter && statusFilter.length) {
             filters.push('AND');
             filters.push([PF.STATUS, 'anyof', statusFilter]);
         }
@@ -100,11 +81,11 @@ define([
             type: C.RECORDS.PROPOSAL,
             filters: filters,
             columns: [
-                'internalid', 'name', 'created',
+                'internalid', 'created',
                 PF.TXN_TYPE, PF.NS_RECORD_REF,
                 PF.BANK_DATE, PF.BANK_AMOUNT, PF.BANK_REF,
-                PF.MATCH_DATE, PF.MATCH_AMOUNT,
-                PF.STATUS, PF.ADJUST_DATE, PF.APPLIED_DATE, PF.ERROR_MSG
+                PF.MATCH_AMOUNT, PF.STATUS, PF.ADJUST_DATE,
+                PF.APPLIED_DATE, PF.ERROR_MSG
             ]
         }).run().each(function (row) {
             results.push({
@@ -115,7 +96,6 @@ define([
                 bankDate:    row.getValue(PF.BANK_DATE),
                 bankAmount:  row.getValue(PF.BANK_AMOUNT),
                 bankRef:     row.getValue(PF.BANK_REF),
-                matchDate:   row.getValue(PF.MATCH_DATE),
                 matchAmount: row.getValue(PF.MATCH_AMOUNT),
                 status:      row.getValue(PF.STATUS),
                 adjustDate:  row.getValue(PF.ADJUST_DATE),
@@ -127,68 +107,7 @@ define([
         return results;
     }
 
-    // ── Status label helpers ──────────────────────────────────────────────
-    var STATUS_LABELS = { '1': 'Unmatched', '2': 'Proposed', '3': 'Reconciled', '4': 'Excluded' };
-    var PROP_LABELS   = { '1': 'Pending Approval', '2': 'Approved', '3': 'Rejected', '4': 'Applied', '5': 'Failed' };
-    var TYPE_LABELS   = { '1': 'Customer Payment', '2': 'Bill Payment' };
-
-    function _statusBadge(code, labelMap) {
-        var colors = {
-            '1': '#e8920c', // orange – pending / unmatched
-            '2': '#1b7bb4', // blue   – proposed / approved
-            '3': '#2e7d32', // green  – reconciled
-            '4': '#5a5a5a', // grey   – excluded / applied
-            '5': '#c62828'  // red    – failed
-        };
-        var bg  = colors[String(code)] || '#999';
-        var lbl = labelMap[String(code)] || code;
-        return '<span style="background:' + bg + ';color:#fff;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:600;">' + lbl + '</span>';
-    }
-
-    // ── CSV parser ────────────────────────────────────────────────────────
-    // Expected columns (case-insensitive): Date, Description, Amount, Reference
-    function _parseCsv(content) {
-        var lines = content.split(/\r?\n/);
-        if (lines.length < 2) return [];
-
-        var headers = lines[0].split(',').map(function (h) { return h.replace(/"/g, '').trim().toLowerCase(); });
-        var idxDate = headers.indexOf('date');
-        var idxDesc = headers.indexOf('description');
-        var idxAmt  = headers.indexOf('amount');
-        var idxRef  = headers.indexOf('reference');
-
-        if (idxDate < 0 || idxAmt < 0) return null; // bad format
-
-        var rows = [];
-        for (var i = 1; i < lines.length; i++) {
-            var line = lines[i].trim();
-            if (!line) continue;
-
-            // Simple CSV split (handles basic quoted fields)
-            var cells = [];
-            var inQ = false, cur = '';
-            for (var c = 0; c < line.length; c++) {
-                var ch = line[c];
-                if (ch === '"') { inQ = !inQ; }
-                else if (ch === ',' && !inQ) { cells.push(cur.trim()); cur = ''; }
-                else { cur += ch; }
-            }
-            cells.push(cur.trim());
-
-            var amt = parseFloat(String(cells[idxAmt] || '').replace(/[^0-9.\-]/g, ''));
-            if (isNaN(amt)) continue;
-
-            rows.push({
-                date:        cells[idxDate] || '',
-                description: idxDesc >= 0 ? cells[idxDesc] || '' : '',
-                amount:      amt,
-                reference:   idxRef  >= 0 ? cells[idxRef]  || '' : ''
-            });
-        }
-        return rows;
-    }
-
-    // ── Suitelet URL helper ───────────────────────────────────────────────
+    // ── URL helper ────────────────────────────────────────────────────────
     function _slUrl(params) {
         return url.resolveScript({
             scriptId:     C.SCRIPTS.MAIN_SL,
@@ -198,469 +117,296 @@ define([
         });
     }
 
+    function _redirect(context, flash) {
+        context.response.sendRedirect({
+            type:       'SUITELET',
+            identifier: C.SCRIPTS.MAIN_SL,
+            id:         C.SCRIPTS.MAIN_DEPLOY,
+            parameters: { flash: encodeURIComponent(flash || '') }
+        });
+    }
+
     // ════════════════════════════════════════════════════════════════════════
-    //  PAGE: Dashboard
+    //  PAGE: Main dashboard
     // ════════════════════════════════════════════════════════════════════════
-    function _renderDashboard(context, settings, flashMsg) {
-        var form = ui.createForm({ title: 'Bank Match – Reconciliation' });
+    function _renderDashboard(context, settings, flash) {
+        var form = ui.createForm({ title: 'Bank Match – Reconciliation Automation' });
         form.clientScriptModulePath = './BM_Dashboard_CS.js';
 
-        // ─ Action buttons ─────────────────────────────────────────────────
-        form.addButton({ id: 'btn_import',  label: '⬆ Import Bank Statement', functionName: 'goImport' });
-        form.addButton({ id: 'btn_setup',   label: '⚙ Settings',              functionName: 'goSetup' });
+        // ─ Header buttons ─────────────────────────────────────────────────
+        form.addButton({ id: 'btn_native', label: '↗ Open Match Bank Data', functionName: 'goNative' });
+        form.addButton({ id: 'btn_setup',  label: '⚙ Settings',             functionName: 'goSetup' });
 
-        // ─ Optional flash banner ──────────────────────────────────────────
-        if (flashMsg) {
-            var bannerFld = form.addField({ id: 'custpage_banner', type: ui.FieldType.INLINEHTML, label: ' ' });
-            bannerFld.defaultValue =
-                '<div style="background:#e8f5e9;border:1px solid #a5d6a7;padding:10px 16px;border-radius:4px;margin-bottom:8px;">' +
-                '&#10003;&nbsp;' + flashMsg + '</div>';
+        // ─ Phase 2 info banner ────────────────────────────────────────────
+        var inf = form.addField({ id: 'custpage_info', type: ui.FieldType.INLINEHTML, label: ' ' });
+        inf.defaultValue = [
+            '<div style="background:#e3f2fd;border-left:4px solid #1565c0;',
+            'padding:10px 16px;border-radius:4px;margin-bottom:10px;font-size:12px;line-height:1.8;">',
+            '<strong>Bank Match adds automation on top of NetSuite\'s native Match Bank Data module.</strong><br>',
+            '&#x2460; Import bank data via <em>Transactions &rsaquo; Bank &rsaquo; Match Bank Data</em> as normal.<br>',
+            '&#x2461; Use the <strong>&#9889; Auto-Reconcile</strong> button we inject there to propose matches.<br>',
+            '&#x2462; Proposals appear below. Approver reviews and approves each one.<br>',
+            '&#x2463; On approval, the Customer Payment or Bill Payment is applied in NetSuite automatically.<br>',
+            '&#x2464; Return to <em>Match Bank Data</em> — your applied transactions are ready to match and submit.',
+            '</div>'
+        ].join('');
+
+        if (flash) {
+            var fld = form.addField({ id: 'custpage_flash', type: ui.FieldType.INLINEHTML, label: ' ' });
+            fld.defaultValue = '<div style="background:#e8f5e9;border:1px solid #a5d6a7;padding:8px 14px;' +
+                'border-radius:4px;margin-bottom:8px;">&#10003;&nbsp;' + flash + '</div>';
         }
 
-        // ─ Tab: Unmatched Bank Transactions ──────────────────────────────
-        var tabUnmatched = form.addTab({ id: 'tab_unmatched', label: 'Bank Transactions' });
-
-        var sbUnmatched = form.addSublist({
-            id:        'sl_bank',
-            type:      ui.SublistType.LIST,
-            label:     'Unmatched / Proposed Bank Lines',
-            tab:       'tab_unmatched'
-        });
-
-        sbUnmatched.addField({ id: 'col_date',   type: ui.FieldType.DATE,      label: 'Date' });
-        sbUnmatched.addField({ id: 'col_desc',   type: ui.FieldType.TEXT,      label: 'Description' });
-        sbUnmatched.addField({ id: 'col_amount', type: ui.FieldType.CURRENCY,  label: 'Amount' });
-        sbUnmatched.addField({ id: 'col_ref',    type: ui.FieldType.TEXT,      label: 'Reference' });
-        sbUnmatched.addField({ id: 'col_status', type: ui.FieldType.TEXT,      label: 'Status' });
-        sbUnmatched.addField({ id: 'col_action', type: ui.FieldType.URL,       label: 'Action' })
-                   .linkText = 'Propose Match';
-
-        var txns = _getBankTxns([TS.UNMATCHED, TS.PROPOSED]);
-        txns.forEach(function (txn, i) {
-            sbUnmatched.setSublistValue({ id: 'col_date',   line: i, value: txn.date });
-            sbUnmatched.setSublistValue({ id: 'col_desc',   line: i, value: txn.description || '—' });
-            sbUnmatched.setSublistValue({ id: 'col_amount', line: i, value: txn.amount });
-            sbUnmatched.setSublistValue({ id: 'col_ref',    line: i, value: txn.reference  || '—' });
-            sbUnmatched.setSublistValue({ id: 'col_status', line: i, value: STATUS_LABELS[String(txn.status)] || txn.status });
-            sbUnmatched.setSublistValue({ id: 'col_action', line: i,
-                value: _slUrl({ action: 'match', banktxn: txn.id }) });
-        });
-
         // ─ Tab: Pending Approvals ─────────────────────────────────────────
-        var tabPending = form.addTab({ id: 'tab_pending', label: 'Pending Approvals' });
+        form.addTab({ id: 'tab_pending', label: 'Pending Approvals' });
 
-        var sbPending = form.addSublist({
+        var pending = _getProposals([PS.PENDING]);
+        var sbPend  = form.addSublist({
             id:   'sl_pending',
             type: ui.SublistType.LIST,
-            label: 'Proposals Awaiting Approval',
+            label: 'Proposals awaiting approval — ' + pending.length + ' pending',
             tab:  'tab_pending'
         });
 
-        sbPending.addField({ id: 'pp_type',    type: ui.FieldType.TEXT,    label: 'Type' });
-        sbPending.addField({ id: 'pp_bankdate', type: ui.FieldType.DATE,    label: 'Bank Date' });
-        sbPending.addField({ id: 'pp_bankamt',  type: ui.FieldType.CURRENCY, label: 'Bank Amount' });
-        sbPending.addField({ id: 'pp_bankref',  type: ui.FieldType.TEXT,    label: 'Bank Ref' });
-        sbPending.addField({ id: 'pp_nsref',    type: ui.FieldType.TEXT,    label: 'NS Transaction' });
-        sbPending.addField({ id: 'pp_adjdate',  type: ui.FieldType.TEXT,    label: 'Adjust Date' });
-        sbPending.addField({ id: 'pp_link',     type: ui.FieldType.URL,     label: 'Open Proposal' })
-                 .linkText = 'Review';
+        sbPend.addField({ id: 'pp_type',    type: ui.FieldType.TEXT,     label: 'Type' });
+        sbPend.addField({ id: 'pp_date',    type: ui.FieldType.DATE,     label: 'Bank Date' });
+        sbPend.addField({ id: 'pp_amount',  type: ui.FieldType.CURRENCY, label: 'Bank Amount' });
+        sbPend.addField({ id: 'pp_ref',     type: ui.FieldType.TEXT,     label: 'Bank Ref' });
+        sbPend.addField({ id: 'pp_ns',      type: ui.FieldType.TEXT,     label: 'NS Transaction' });
+        sbPend.addField({ id: 'pp_adjdate', type: ui.FieldType.TEXT,     label: 'Adjust Date?' });
+        sbPend.addField({ id: 'pp_open',    type: ui.FieldType.URL,      label: 'Approve / Reject' })
+              .linkText = 'Open Proposal';
 
-        var pending = _getProposals([PS.PENDING]);
         pending.forEach(function (p, i) {
-            sbPending.setSublistValue({ id: 'pp_type',    line: i, value: TYPE_LABELS[p.txnType] || p.txnType });
-            sbPending.setSublistValue({ id: 'pp_bankdate', line: i, value: p.bankDate });
-            sbPending.setSublistValue({ id: 'pp_bankamt',  line: i, value: p.bankAmount });
-            sbPending.setSublistValue({ id: 'pp_bankref',  line: i, value: p.bankRef || '—' });
-            sbPending.setSublistValue({ id: 'pp_nsref',    line: i, value: p.nsRef   || '—' });
-            sbPending.setSublistValue({ id: 'pp_adjdate',  line: i,
-                value: (p.adjustDate === 'T' || p.adjustDate === true) ? 'Yes' : 'No' });
-            sbPending.setSublistValue({ id: 'pp_link', line: i,
+            sbPend.setSublistValue({ id: 'pp_type',    line: i, value: TYPE_LABELS[p.txnType] || '—' });
+            sbPend.setSublistValue({ id: 'pp_date',    line: i, value: p.bankDate   || '' });
+            sbPend.setSublistValue({ id: 'pp_amount',  line: i, value: p.bankAmount || 0 });
+            sbPend.setSublistValue({ id: 'pp_ref',     line: i, value: p.bankRef    || '—' });
+            sbPend.setSublistValue({ id: 'pp_ns',      line: i, value: p.nsRef      || '—' });
+            sbPend.setSublistValue({ id: 'pp_adjdate', line: i,
+                value: (p.adjustDate === 'T' || p.adjustDate === true) ? 'Yes' : '—' });
+            sbPend.setSublistValue({ id: 'pp_open', line: i,
                 value: '/app/common/custom/custrecordentry.nl?rectype=' +
                        encodeURIComponent(C.RECORDS.PROPOSAL) + '&id=' + p.id });
         });
 
         // ─ Tab: History ───────────────────────────────────────────────────
-        var tabHistory = form.addTab({ id: 'tab_history', label: 'History' });
-
-        var sbHistory = form.addSublist({
+        form.addTab({ id: 'tab_history', label: 'History' });
+        var history = _getProposals([PS.APPLIED, PS.REJECTED, PS.FAILED]);
+        var sbHist  = form.addSublist({
             id:   'sl_history',
             type: ui.SublistType.LIST,
-            label: 'Applied & Rejected Proposals',
+            label: 'Applied & rejected — ' + history.length + ' total',
             tab:  'tab_history'
         });
+        sbHist.addField({ id: 'hh_type',    type: ui.FieldType.TEXT,     label: 'Type' });
+        sbHist.addField({ id: 'hh_result',  type: ui.FieldType.TEXT,     label: 'Result' });
+        sbHist.addField({ id: 'hh_date',    type: ui.FieldType.DATE,     label: 'Bank Date' });
+        sbHist.addField({ id: 'hh_amount',  type: ui.FieldType.CURRENCY, label: 'Bank Amount' });
+        sbHist.addField({ id: 'hh_ns',      type: ui.FieldType.TEXT,     label: 'NS Transaction' });
+        sbHist.addField({ id: 'hh_applied', type: ui.FieldType.DATE,     label: 'Applied On' });
+        sbHist.addField({ id: 'hh_error',   type: ui.FieldType.TEXT,     label: 'Error' });
 
-        sbHistory.addField({ id: 'hh_type',     type: ui.FieldType.TEXT,    label: 'Type' });
-        sbHistory.addField({ id: 'hh_status',   type: ui.FieldType.TEXT,    label: 'Result' });
-        sbHistory.addField({ id: 'hh_bankdate', type: ui.FieldType.DATE,    label: 'Bank Date' });
-        sbHistory.addField({ id: 'hh_bankamt',  type: ui.FieldType.CURRENCY, label: 'Bank Amount' });
-        sbHistory.addField({ id: 'hh_bankref',  type: ui.FieldType.TEXT,    label: 'Bank Ref' });
-        sbHistory.addField({ id: 'hh_nsref',    type: ui.FieldType.TEXT,    label: 'NS Transaction' });
-        sbHistory.addField({ id: 'hh_applied',  type: ui.FieldType.DATE,    label: 'Applied Date' });
-        sbHistory.addField({ id: 'hh_error',    type: ui.FieldType.TEXT,    label: 'Error' });
-
-        var history = _getProposals([PS.APPLIED, PS.REJECTED, PS.FAILED]);
         history.forEach(function (p, i) {
-            sbHistory.setSublistValue({ id: 'hh_type',     line: i, value: TYPE_LABELS[p.txnType] || p.txnType });
-            sbHistory.setSublistValue({ id: 'hh_status',   line: i, value: PROP_LABELS[p.status]  || p.status });
-            sbHistory.setSublistValue({ id: 'hh_bankdate', line: i, value: p.bankDate });
-            sbHistory.setSublistValue({ id: 'hh_bankamt',  line: i, value: p.bankAmount });
-            sbHistory.setSublistValue({ id: 'hh_bankref',  line: i, value: p.bankRef   || '—' });
-            sbHistory.setSublistValue({ id: 'hh_nsref',    line: i, value: p.nsRef     || '—' });
-            sbHistory.setSublistValue({ id: 'hh_applied',  line: i, value: p.appliedDate || '' });
-            sbHistory.setSublistValue({ id: 'hh_error',    line: i, value: p.errorMsg  || '' });
+            sbHist.setSublistValue({ id: 'hh_type',    line: i, value: TYPE_LABELS[p.txnType] || '—' });
+            sbHist.setSublistValue({ id: 'hh_result',  line: i, value: PROP_LABELS[p.status]  || p.status });
+            sbHist.setSublistValue({ id: 'hh_date',    line: i, value: p.bankDate    || '' });
+            sbHist.setSublistValue({ id: 'hh_amount',  line: i, value: p.bankAmount  || 0 });
+            sbHist.setSublistValue({ id: 'hh_ns',      line: i, value: p.nsRef       || '—' });
+            sbHist.setSublistValue({ id: 'hh_applied', line: i, value: p.appliedDate || '' });
+            sbHist.setSublistValue({ id: 'hh_error',   line: i, value: p.errorMsg    || '' });
         });
 
         context.response.writePage(form);
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  PAGE: Import CSV
+    //  PAGE: Match selection (manual propose for one bank line)
     // ════════════════════════════════════════════════════════════════════════
-    function _renderImportPage(context, settings) {
-        var form = ui.createForm({ title: 'Bank Match – Import Bank Statement' });
-
-        form.addButton({ id: 'btn_back', label: '← Back to Dashboard',
-            functionName: 'history.back' });
-
-        var grp = form.addFieldGroup({ id: 'grp_import', label: 'CSV File Import' });
-
-        // Instructions
-        var instr = form.addField({ id: 'custpage_instr', type: ui.FieldType.INLINEHTML,
-            label: ' ', container: 'grp_import' });
-        instr.defaultValue =
-            '<div style="background:#f5f8ff;border:1px solid #c5cee0;padding:12px 16px;border-radius:4px;margin-bottom:12px;">' +
-            '<strong>CSV Format Required:</strong><br>' +
-            '<code style="font-size:12px;">Date, Description, Amount, Reference</code><br><br>' +
-            '<ul style="margin:4px 0 0 16px;font-size:12px;">' +
-            '<li><strong>Date</strong> – transaction date (YYYY-MM-DD or MM/DD/YYYY)</li>' +
-            '<li><strong>Description</strong> – bank narrative</li>' +
-            '<li><strong>Amount</strong> – positive = credit (money in), negative = debit (money out)</li>' +
-            '<li><strong>Reference</strong> – bank reference number (optional but improves matching)</li>' +
-            '</ul></div>';
-
-        form.addField({ id: 'custpage_file', type: ui.FieldType.FILE,
-            label: 'Bank Statement CSV', container: 'grp_import' }).isMandatory = true;
-
-        // Bank account override
-        var fldAcct = form.addField({ id: 'custpage_bank_acct', type: ui.FieldType.SELECT,
-            label: 'Bank Account', source: 'account', container: 'grp_import' });
-        if (settings && settings.bankAccount) fldAcct.defaultValue = settings.bankAccount;
-
-        form.addSubmitButton({ label: 'Import & Auto-suggest Matches' });
-        form.addField({ id: 'custpage_action', type: ui.FieldType.TEXT, label: ' ' })
-            .updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN })
-            .defaultValue = 'import_csv';
-
-        context.response.writePage(form);
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    //  PAGE: Match selection
-    // ════════════════════════════════════════════════════════════════════════
-    function _renderMatchPage(context, settings, bankTxnId) {
-        // Load bank transaction
-        var bankTxnRec = record.load({ type: C.RECORDS.BANK_TXN, id: bankTxnId });
-        var bankTxn = {
-            id:          bankTxnId,
-            date:        bankTxnRec.getValue(BTF.TXN_DATE),
-            description: bankTxnRec.getValue(BTF.DESCRIPTION),
-            amount:      parseFloat(bankTxnRec.getValue(BTF.AMOUNT)),
-            reference:   bankTxnRec.getValue(BTF.REFERENCE),
-            currency:    bankTxnRec.getValue(BTF.CURRENCY)
+    function _renderMatchPage(context, settings, params) {
+        var bankLine = {
+            id:          params.bankline  || '',
+            date:        params.bl_date   || '',
+            amount:      parseFloat(params.bl_amt || 0),
+            reference:   params.bl_ref    || '',
+            description: params.bl_desc   || ''
         };
+        var isCredit  = bankLine.amount > 0;
+        var matchType = isCredit ? 'Customer Payment → Invoice' : 'Bill Payment (Vendor)';
 
-        var isCredit = bankTxn.amount > 0; // credit = money received = customer payment
         var form = ui.createForm({
-            title: 'Propose Match – Bank Line: ' + (bankTxn.reference || bankTxn.description)
+            title: 'Propose Match — ' + (bankLine.reference || bankLine.description || 'Bank Line')
         });
         form.clientScriptModulePath = './BM_Dashboard_CS.js';
+        form.addButton({ id: 'btn_back', label: '← Back', functionName: 'goBack' });
 
-        form.addButton({ id: 'btn_back', label: '← Back to Dashboard',
-            functionName: 'goBack' });
+        // ─ Bank line summary ──────────────────────────────────────────────
+        form.addFieldGroup({ id: 'grp_bl', label: 'Bank Line (from Match Bank Data)' });
+        var blHtml = form.addField({ id: 'custpage_bl_html',
+            type: ui.FieldType.INLINEHTML, label: ' ', container: 'grp_bl' });
+        blHtml.defaultValue = [
+            '<table style="font-size:13px;line-height:2;width:100%;">',
+            '<tr><td style="width:130px;font-weight:600;color:#555;">Date</td>',
+            '<td><strong>' + (bankLine.date || '—') + '</strong></td></tr>',
+            '<tr><td style="font-weight:600;color:#555;">Description</td>',
+            '<td>' + (bankLine.description || '—') + '</td></tr>',
+            '<tr><td style="font-weight:600;color:#555;">Amount</td>',
+            '<td><strong style="font-size:15px;color:' + (isCredit ? '#2e7d32' : '#c62828') + ';">',
+            (isCredit ? '+' : '') + bankLine.amount.toFixed(2) + '</strong></td></tr>',
+            '<tr><td style="font-weight:600;color:#555;">Reference</td>',
+            '<td>' + (bankLine.reference || '—') + '</td></tr>',
+            '<tr><td style="font-weight:600;color:#555;">Type</td>',
+            '<td><span style="background:#e3f2fd;color:#1565c0;padding:2px 8px;border-radius:3px;font-size:12px;">',
+            matchType + '</span></td></tr>',
+            '</table>'
+        ].join('');
 
-        // ─ Bank transaction summary ───────────────────────────────────────
-        var grpBank = form.addFieldGroup({ id: 'grp_bank_summary', label: 'Bank Transaction' });
-
-        var sumFld = form.addField({ id: 'custpage_bank_summary', type: ui.FieldType.INLINEHTML,
-            label: ' ', container: 'grp_bank_summary' });
-        sumFld.defaultValue =
-            '<table style="font-size:13px;line-height:1.8;width:100%;">' +
-            '<tr><td style="width:130px;color:#555;">Date</td><td><strong>' + bankTxn.date + '</strong></td></tr>' +
-            '<tr><td style="color:#555;">Description</td><td>' + (bankTxn.description || '—') + '</td></tr>' +
-            '<tr><td style="color:#555;">Amount</td><td><strong style="color:' + (isCredit ? '#2e7d32' : '#c62828') + ';">' +
-            (isCredit ? '+' : '') + bankTxn.amount.toFixed(2) + ' ' + (bankTxn.currency || '') + '</strong></td></tr>' +
-            '<tr><td style="color:#555;">Reference</td><td>' + (bankTxn.reference || '—') + '</td></tr>' +
-            '</table>';
-
-        // ─ Match type header ──────────────────────────────────────────────
-        var matchType = isCredit ? 'Customer Payment → Invoice' : 'Bill Payment';
-        var matchTypeFld = form.addField({ id: 'custpage_match_type', type: ui.FieldType.INLINEHTML, label: ' ' });
-        matchTypeFld.defaultValue =
-            '<div style="margin:8px 0;padding:8px 14px;background:#e3f2fd;border-left:4px solid #1565c0;border-radius:2px;font-size:13px;">' +
-            '<strong>Match type:</strong> ' + matchType +
-            (isCredit
-                ? ' &nbsp;|&nbsp; Select the open Sales Invoice to apply this payment to.'
-                : ' &nbsp;|&nbsp; Select the Vendor Payment record. You can optionally adjust its date to match the bank.') +
-            '</div>';
-
-        // ─ Find candidates ────────────────────────────────────────────────
+        // ─ Scored candidates ──────────────────────────────────────────────
         var candidates = isCredit
-            ? engine.findInvoiceMatches(bankTxn, settings || { tolAmt: 0.01, tolDays: 5 })
-            : engine.findBillPaymentMatches(bankTxn, settings || { tolAmt: 0.01, tolDays: 5 });
-
-        // ─ Candidate sublist ──────────────────────────────────────────────
-        var grpCand = form.addFieldGroup({ id: 'grp_candidates', label: 'Suggested Matches (click Select to propose)' });
+            ? engine.findInvoiceMatches(bankLine, settings)
+            : engine.findBillPaymentMatches(bankLine, settings);
 
         var sb = form.addSublist({
-            id:   'sl_candidates',
+            id:   'sl_cand',
             type: ui.SublistType.LIST,
-            label: candidates.length + ' candidate(s) found'
+            label: (candidates.length || 'No') + ' suggested match(es) — click Select to propose'
         });
-
-        sb.addField({ id: 'c_score',  type: ui.FieldType.INTEGER, label: 'Score' });
-        sb.addField({ id: 'c_ref',    type: ui.FieldType.TEXT,    label: isCredit ? 'Invoice #' : 'Payment #' });
-        sb.addField({ id: 'c_entity', type: ui.FieldType.TEXT,    label: isCredit ? 'Customer'  : 'Vendor' });
-        sb.addField({ id: 'c_date',   type: ui.FieldType.DATE,    label: 'NS Date' });
-        sb.addField({ id: 'c_amount', type: ui.FieldType.CURRENCY, label: 'Amount' });
-        sb.addField({ id: 'c_action', type: ui.FieldType.URL,     label: 'Action' })
-          .linkText = 'Select';
+        sb.addField({ id: 'c_score',  type: ui.FieldType.INTEGER,  label: 'Score' });
+        sb.addField({ id: 'c_ref',    type: ui.FieldType.TEXT,     label: isCredit ? 'Invoice #' : 'Payment #' });
+        sb.addField({ id: 'c_entity', type: ui.FieldType.TEXT,     label: isCredit ? 'Customer' : 'Vendor' });
+        sb.addField({ id: 'c_date',   type: ui.FieldType.DATE,     label: 'NS Date' });
+        sb.addField({ id: 'c_amount', type: ui.FieldType.CURRENCY, label: 'NS Amount' });
+        sb.addField({ id: 'c_select', type: ui.FieldType.URL,      label: 'Action' }).linkText = 'Select';
 
         candidates.forEach(function (cand, i) {
-            var propParams = {
+            sb.setSublistValue({ id: 'c_score',  line: i, value: cand.score });
+            sb.setSublistValue({ id: 'c_ref',    line: i, value: cand.reference || '—' });
+            sb.setSublistValue({ id: 'c_entity', line: i, value: cand.entity    || '—' });
+            sb.setSublistValue({ id: 'c_date',   line: i, value: cand.date });
+            sb.setSublistValue({ id: 'c_amount', line: i, value: cand.amount });
+            sb.setSublistValue({ id: 'c_select', line: i, value: _slUrl({
                 action:     'create_proposal',
-                banktxn:    bankTxnId,
+                bankline:   bankLine.id,
+                bl_date:    bankLine.date,
+                bl_amt:     bankLine.amount,
+                bl_ref:     bankLine.reference,
                 ns_id:      cand.nsId,
                 ns_type:    cand.nsType,
                 ns_ref:     cand.reference,
                 txn_type:   isCredit ? TT.CUSTOMER_PAYMENT : TT.BILL_PAYMENT,
                 match_amt:  cand.amount,
                 match_date: cand.date
-            };
-            sb.setSublistValue({ id: 'c_score',  line: i, value: cand.score });
-            sb.setSublistValue({ id: 'c_ref',    line: i, value: cand.reference || '—' });
-            sb.setSublistValue({ id: 'c_entity', line: i, value: cand.entity    || '—' });
-            sb.setSublistValue({ id: 'c_date',   line: i, value: cand.date });
-            sb.setSublistValue({ id: 'c_amount', line: i, value: cand.amount });
-            sb.setSublistValue({ id: 'c_action', line: i, value: _slUrl(propParams) });
+            }) });
         });
 
-        if (candidates.length === 0) {
-            var noMatch = form.addField({ id: 'custpage_nomatch', type: ui.FieldType.INLINEHTML, label: ' ' });
-            noMatch.defaultValue =
-                '<div style="padding:12px;color:#777;font-style:italic;">No automatic matches found within tolerance. ' +
-                'You can still create a manual proposal using the form below.</div>';
-        }
+        // ─ Manual entry ───────────────────────────────────────────────────
+        form.addFieldGroup({ id: 'grp_manual', label: 'Manual Proposal' });
 
-        // ─ Manual proposal form ───────────────────────────────────────────
-        var grpManual = form.addFieldGroup({ id: 'grp_manual', label: 'Manual Proposal' });
-
-        form.addField({ id: 'custpage_ns_id_manual', type: ui.FieldType.INTEGER,
+        form.addField({ id: 'custpage_m_ns_id', type: ui.FieldType.INTEGER,
             label: isCredit ? 'Invoice Internal ID' : 'Vendor Payment Internal ID',
-            container: 'grp_manual' }).helpText = 'Enter the NetSuite internal ID if not listed above.';
-
-        form.addField({ id: 'custpage_ns_ref_manual', type: ui.FieldType.TEXT,
+            container: 'grp_manual' });
+        form.addField({ id: 'custpage_m_ns_ref', type: ui.FieldType.TEXT,
             label: 'NS Transaction #', container: 'grp_manual' });
 
         if (!isCredit) {
             form.addField({ id: 'custpage_adj_date', type: ui.FieldType.CHECKBOX,
-                label: 'Adjust Payment Date in NetSuite to Bank Date', container: 'grp_manual' })
-                .helpText = 'When checked, the Vendor Payment\'s date will be updated to ' + bankTxn.date + '.';
+                label: 'Adjust Vendor Payment date in NetSuite to match bank date (' + bankLine.date + ')',
+                container: 'grp_manual' })
+            .helpText = 'On approval, the Vendor Payment\'s date will be updated to the bank line date.';
         }
 
         form.addField({ id: 'custpage_notes', type: ui.FieldType.TEXTAREA,
             label: 'Notes', container: 'grp_manual' });
 
-        // Hidden fields
-        ['banktxn', 'bank_date', 'bank_amount', 'bank_ref', 'txn_type_default', 'action_manual'].forEach(function (id) {
-            var fld = form.addField({ id: 'custpage_' + id, type: ui.FieldType.TEXT, label: id });
-            fld.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
+        var hidden = {
+            custpage_h_bankline: bankLine.id,
+            custpage_h_bl_date:  bankLine.date,
+            custpage_h_bl_amt:   bankLine.amount,
+            custpage_h_bl_ref:   bankLine.reference,
+            custpage_h_txn_type: isCredit ? TT.CUSTOMER_PAYMENT : TT.BILL_PAYMENT,
+            custpage_action:     'create_proposal'
+        };
+        Object.keys(hidden).forEach(function (fid) {
+            var f = form.addField({ id: fid, type: ui.FieldType.TEXT, label: fid });
+            f.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
+            f.defaultValue = String(hidden[fid]);
         });
 
-        form.addSubmitButton({ label: 'Submit Manual Proposal for Approval' });
-
+        form.addSubmitButton({ label: 'Submit Proposal for Approval' });
         context.response.writePage(form);
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  POST: Import CSV
-    // ════════════════════════════════════════════════════════════════════════
-    function _handleImportCsv(context, settings) {
-        var req = context.request;
-        var fileObj = req.files.custpage_file;
-        if (!fileObj) {
-            _redirect(context, 'Import failed – no file selected.');
-            return;
-        }
-
-        var content = fileObj.getContents();
-        var rows = _parseCsv(content);
-        if (!rows) {
-            _redirect(context, 'Import failed – CSV must have columns: Date, Description, Amount, Reference');
-            return;
-        }
-
-        var bankAcct = req.parameters.custpage_bank_acct || (settings && settings.bankAccount) || '';
-        var created = 0;
-        var autoProposed = 0;
-
-        rows.forEach(function (row) {
-            try {
-                var txnRec = record.create({ type: C.RECORDS.BANK_TXN });
-                txnRec.setValue({ fieldId: BTF.TXN_DATE,    value: new Date(row.date) });
-                txnRec.setValue({ fieldId: BTF.DESCRIPTION, value: row.description });
-                txnRec.setValue({ fieldId: BTF.AMOUNT,      value: row.amount });
-                txnRec.setValue({ fieldId: BTF.REFERENCE,   value: row.reference });
-                txnRec.setValue({ fieldId: BTF.STATUS,      value: TS.UNMATCHED });
-                if (bankAcct) txnRec.setValue({ fieldId: BTF.BANK_ACCOUNT, value: bankAcct });
-                var txnId = txnRec.save();
-                created++;
-
-                // Auto-suggest if enabled
-                if (settings && settings.autoSuggest) {
-                    var bankTxn = { date: row.date, amount: row.amount, reference: row.reference };
-                    var candidates = row.amount > 0
-                        ? engine.findInvoiceMatches(bankTxn, settings)
-                        : engine.findBillPaymentMatches(bankTxn, settings);
-
-                    if (candidates.length > 0) {
-                        var best = candidates[0];
-                        _createProposal({
-                            bankTxnId:  txnId,
-                            bankDate:   row.date,
-                            bankAmount: row.amount,
-                            bankRef:    row.reference,
-                            nsId:       best.nsId,
-                            nsType:     best.nsType,
-                            nsRef:      best.reference,
-                            txnType:    row.amount > 0 ? TT.CUSTOMER_PAYMENT : TT.BILL_PAYMENT,
-                            matchAmt:   best.amount,
-                            matchDate:  best.date,
-                            adjustDate: false,
-                            notes:      'Auto-suggested (score ' + best.score + ')'
-                        }, settings);
-                        autoProposed++;
-
-                        // Mark bank txn as Proposed
-                        record.submitFields({
-                            type: C.RECORDS.BANK_TXN, id: txnId,
-                            values: { [BTF.STATUS]: TS.PROPOSED },
-                            options: { ignoreMandatoryFields: true }
-                        });
-                    }
-                }
-            } catch (e) {
-                log.error('BM_Main_SL.importCsv', 'Row error: ' + JSON.stringify(row) + ' – ' + e.message);
-            }
-        });
-
-        var msg = 'Imported ' + created + ' bank lines.' +
-            (autoProposed > 0 ? ' ' + autoProposed + ' match proposal(s) automatically created.' : '');
-        _redirect(context, msg);
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    //  POST: Create proposal
+    //  POST/GET: Create proposal
     // ════════════════════════════════════════════════════════════════════════
     function _handleCreateProposal(context, settings) {
         var p = context.request.parameters;
 
-        var proposalData = {
-            bankTxnId:  p.banktxn || p.custpage_banktxn,
-            bankDate:   p.bank_date   || p.custpage_bank_date,
-            bankAmount: p.bank_amount || p.custpage_bank_amount,
-            bankRef:    p.bank_ref    || p.custpage_bank_ref,
-            nsId:       p.ns_id       || p.custpage_ns_id_manual,
-            nsType:     p.ns_type,
-            nsRef:      p.ns_ref      || p.custpage_ns_ref_manual,
-            txnType:    p.txn_type    || p.custpage_txn_type_default,
-            matchAmt:   p.match_amt,
-            matchDate:  p.match_date,
-            adjustDate: p.custpage_adj_date === 'T',
-            notes:      p.custpage_notes || ''
-        };
+        var bankLineId = p.bankline   || p.custpage_h_bankline || '';
+        var bankDate   = p.bl_date    || p.custpage_h_bl_date  || '';
+        var bankAmount = parseFloat(p.bl_amt  || p.custpage_h_bl_amt  || 0);
+        var bankRef    = p.bl_ref     || p.custpage_h_bl_ref   || '';
+        var txnType    = p.txn_type   || p.custpage_h_txn_type || TT.CUSTOMER_PAYMENT;
+        var nsId       = parseInt(p.ns_id || p.custpage_m_ns_id || 0, 10);
+        var nsType     = p.ns_type || (String(txnType) === String(TT.CUSTOMER_PAYMENT) ? 'invoice' : 'vendorpayment');
+        var nsRef      = p.ns_ref     || p.custpage_m_ns_ref   || '';
+        var matchAmt   = parseFloat(p.match_amt  || 0) || bankAmount;
+        var matchDate  = p.match_date || bankDate;
+        var adjustDate = p.custpage_adj_date === 'T';
+        var notes      = p.custpage_notes || '';
 
-        // If bank txn details not in params, load from record
-        if (!proposalData.bankDate && proposalData.bankTxnId) {
-            try {
-                var txnRec = record.load({ type: C.RECORDS.BANK_TXN, id: proposalData.bankTxnId });
-                proposalData.bankDate   = txnRec.getValue(BTF.TXN_DATE);
-                proposalData.bankAmount = txnRec.getValue(BTF.AMOUNT);
-                proposalData.bankRef    = txnRec.getValue(BTF.REFERENCE);
-            } catch (e) { log.error('BM_Main_SL', 'Load bank txn: ' + e.message); }
+        if (!nsId) {
+            _redirect(context, 'Please enter a valid NetSuite record ID.');
+            return;
         }
 
-        var propId = _createProposal(proposalData, settings);
-        if (propId && proposalData.bankTxnId) {
-            record.submitFields({
-                type: C.RECORDS.BANK_TXN, id: proposalData.bankTxnId,
-                values: { [BTF.STATUS]: TS.PROPOSED },
-                options: { ignoreMandatoryFields: true }
-            });
-        }
-
-        _redirect(context, 'Match proposal submitted for approval.' +
-            (settings && settings.approver ? ' The approver has been notified.' : ''));
-    }
-
-    // ── Create a proposal record ──────────────────────────────────────────
-    function _createProposal(data, settings) {
         try {
-            var approver = settings && settings.approver ? settings.approver : null;
-            var rec = record.create({ type: C.RECORDS.PROPOSAL });
-            rec.setValue({ fieldId: PF.BANK_TXN,       value: data.bankTxnId });
-            rec.setValue({ fieldId: PF.TXN_TYPE,       value: data.txnType });
-            rec.setValue({ fieldId: PF.NS_RECORD_TYPE, value: data.nsType  || '' });
-            rec.setValue({ fieldId: PF.NS_RECORD_ID,   value: parseInt(data.nsId, 10) || 0 });
-            rec.setValue({ fieldId: PF.NS_RECORD_REF,  value: data.nsRef   || '' });
-            rec.setValue({ fieldId: PF.MATCH_AMOUNT,   value: parseFloat(data.matchAmt) || 0 });
-            rec.setValue({ fieldId: PF.MATCH_DATE,     value: data.matchDate ? new Date(data.matchDate) : null });
-            rec.setValue({ fieldId: PF.STATUS,         value: PS.PENDING });
-            rec.setValue({ fieldId: PF.ADJUST_DATE,    value: !!data.adjustDate });
-            rec.setValue({ fieldId: PF.NOTES,          value: data.notes  || '' });
-            rec.setValue({ fieldId: PF.BANK_AMOUNT,    value: parseFloat(data.bankAmount) || 0 });
-            rec.setValue({ fieldId: PF.BANK_DATE,      value: data.bankDate ? new Date(data.bankDate) : null });
-            rec.setValue({ fieldId: PF.BANK_REF,       value: data.bankRef || '' });
-            if (approver) rec.setValue({ fieldId: PF.APPROVER, value: approver });
+            var propRec = record.create({ type: C.RECORDS.PROPOSAL });
+            propRec.setValue({ fieldId: PF.TXN_TYPE,       value: txnType });
+            propRec.setValue({ fieldId: PF.NS_RECORD_TYPE, value: nsType });
+            propRec.setValue({ fieldId: PF.NS_RECORD_ID,   value: nsId });
+            propRec.setValue({ fieldId: PF.NS_RECORD_REF,  value: nsRef });
+            propRec.setValue({ fieldId: PF.MATCH_AMOUNT,   value: matchAmt });
+            propRec.setValue({ fieldId: PF.MATCH_DATE,     value: matchDate ? new Date(matchDate) : null });
+            propRec.setValue({ fieldId: PF.STATUS,         value: PS.PENDING });
+            propRec.setValue({ fieldId: PF.ADJUST_DATE,    value: adjustDate });
+            propRec.setValue({ fieldId: PF.NOTES,          value: notes });
+            propRec.setValue({ fieldId: PF.BANK_AMOUNT,    value: bankAmount });
+            propRec.setValue({ fieldId: PF.BANK_DATE,      value: bankDate ? new Date(bankDate) : null });
+            propRec.setValue({ fieldId: PF.BANK_REF,       value: bankRef });
+            try { propRec.setValue({ fieldId: PF.BANK_LINE_ID, value: String(bankLineId) }); }
+            catch (e) { /* optional field */ }
+            if (settings && settings.approver) propRec.setValue({ fieldId: PF.APPROVER, value: settings.approver });
 
-            var propId = rec.save();
+            var propId = propRec.save();
 
             // Notify approver
             var notifyEmail = (settings && settings.notifyEmail) || '';
             if (!notifyEmail && settings && settings.approver) {
                 try {
-                    var empRec = record.load({ type: record.Type.EMPLOYEE, id: settings.approver });
-                    notifyEmail = empRec.getValue('email');
+                    var emp = record.load({ type: record.Type.EMPLOYEE, id: settings.approver });
+                    notifyEmail = emp.getValue('email');
                 } catch (e) { /* ignore */ }
             }
             if (notifyEmail) {
-                var typeLabel = data.txnType === TT.CUSTOMER_PAYMENT ? 'Customer Payment' : 'Bill Payment';
                 engine.notifyApprover({
                     approverEmail: notifyEmail,
                     proposalId:    propId,
-                    bankRef:       data.bankRef   || '—',
-                    bankAmt:       data.bankAmount,
-                    bankDate:      data.bankDate,
-                    nsRef:         data.nsRef     || '—',
-                    type:          typeLabel
+                    bankRef:       bankRef || '—',
+                    bankAmt:       bankAmount,
+                    bankDate:      bankDate,
+                    nsRef:         nsRef   || '—',
+                    type:          TYPE_LABELS[String(txnType)] || txnType
                 });
             }
 
-            log.audit('BM_Main_SL', 'Proposal created id=' + propId);
-            return propId;
+            log.audit('BM_Main_SL', 'Proposal ' + propId + ' created');
+            _redirect(context, 'Proposal submitted for approval. ' +
+                'After approval, return to Match Bank Data to complete the reconciliation.');
         } catch (e) {
-            log.error('BM_Main_SL._createProposal', e.message);
-            return null;
+            log.error('BM_Main_SL._handleCreateProposal', e.message);
+            _redirect(context, 'Error: ' + e.message);
         }
-    }
-
-    // ── Redirect helper ───────────────────────────────────────────────────
-    function _redirect(context, flash) {
-        context.response.sendRedirect({
-            type:       'SUITELET',
-            identifier: C.SCRIPTS.MAIN_SL,
-            id:         C.SCRIPTS.MAIN_DEPLOY,
-            parameters: { flash: encodeURIComponent(flash) }
-        });
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -671,39 +417,23 @@ define([
         var action   = req.parameters.action || '';
         var settings = _getSettings();
 
-        // Guard: redirect to setup if no settings
-        if (!settings && action !== 'import_csv') {
+        if (!settings) {
             context.response.sendRedirect({
-                type:       'SUITELET',
-                identifier: C.SCRIPTS.SETUP_SL,
-                id:         C.SCRIPTS.SETUP_DEPLOY
+                type: 'SUITELET', identifier: C.SCRIPTS.SETUP_SL, id: C.SCRIPTS.SETUP_DEPLOY
             });
             return;
         }
 
-        if (req.method === 'POST') {
-            var postAction = req.parameters.custpage_action || action;
-            if (postAction === 'import_csv') { _handleImportCsv(context, settings); return; }
-            if (postAction === 'create_proposal') { _handleCreateProposal(context, settings); return; }
-        }
-
-        // GET routes
-        if (action === 'import') {
-            _renderImportPage(context, settings);
-            return;
-        }
-        if (action === 'match') {
-            var bankTxnId = req.parameters.banktxn;
-            if (!bankTxnId) { _renderDashboard(context, settings, null); return; }
-            _renderMatchPage(context, settings, bankTxnId);
-            return;
-        }
-        if (action === 'create_proposal') {
+        if (req.method === 'POST' || action === 'create_proposal') {
             _handleCreateProposal(context, settings);
             return;
         }
 
-        // Default: dashboard
+        if (action === 'match') {
+            _renderMatchPage(context, settings, req.parameters);
+            return;
+        }
+
         var flash = req.parameters.flash ? decodeURIComponent(req.parameters.flash) : null;
         _renderDashboard(context, settings, flash);
     }
