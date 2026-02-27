@@ -67,16 +67,6 @@
       <helptext>Employee who must approve all reconciliation proposals before they are applied.</helptext>
     </customrecordcustomfield>
 
-    <customrecordcustomfield scriptid="custrecord_bm_notify_email">
-      <fieldtype>EMAIL</fieldtype>
-      <label>Notification Email</label>
-      <ismandatory>F</ismandatory>
-      <showinlist>F</showinlist>
-      <isformula>F</isformula>
-      <encryptatrest>F</encryptatrest>
-      <helptext>Override email for approval notifications. Defaults to the approver employee's email.</helptext>
-    </customrecordcustomfield>
-
     <customrecordcustomfield scriptid="custrecord_bm_auto_suggest">
       <fieldtype>CHECKBOX</fieldtype>
       <label>Auto-suggest Matches on Import</label>

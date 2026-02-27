@@ -14,11 +14,9 @@
 define([
     'N/search',
     'N/record',
-    'N/email',
     'N/log',
-    'N/runtime',
     './BM_Constants'
-], function (search, record, email, log, runtime, C) {
+], function (search, record, log, C) {
     'use strict';
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -262,41 +260,6 @@ define([
     }
 
     /**
-     * Send an approval-request email to the approver.
-     * Called when a new Proposal record is saved.
-     *
-     * @param {Object} opts  { approverEmail, proposalId, bankRef, bankAmt, bankDate, nsRef, type }
-     */
-    function notifyApprover(opts) {
-        try {
-            var subject = 'Bank Match – Approval Required: ' + opts.bankRef;
-            var body = [
-                'A new bank reconciliation proposal requires your approval.',
-                '',
-                'Proposal ID  : ' + opts.proposalId,
-                'Type         : ' + opts.type,
-                'Bank Date    : ' + opts.bankDate,
-                'Bank Amount  : ' + opts.bankAmt,
-                'Bank Ref     : ' + opts.bankRef,
-                'NetSuite Ref : ' + opts.nsRef,
-                '',
-                'Please log in to NetSuite and open the proposal record to Approve or Reject.',
-                '',
-                'This is an automated message from the Bank Match SuiteApp.'
-            ].join('\n');
-
-            email.send({
-                author:     runtime.getCurrentUser().id,
-                recipients: [opts.approverEmail],
-                subject:    subject,
-                body:       body
-            });
-        } catch (e) {
-            log.error('BM_MatchEngine.notifyApprover', e.message);
-        }
-    }
-
-    /**
      * Find all open Sales Invoices for a specific customer.
      * Used when the user explicitly selects a customer on the match page.
      *
@@ -389,7 +352,6 @@ define([
         findOpenInvoicesByCustomer: findOpenInvoicesByCustomer,
         findVendorPaymentsByVendor: findVendorPaymentsByVendor,
         applyCustomerPayment:       applyCustomerPayment,
-        applyBillPayment:           applyBillPayment,
-        notifyApprover:             notifyApprover
+        applyBillPayment:           applyBillPayment
     };
 });

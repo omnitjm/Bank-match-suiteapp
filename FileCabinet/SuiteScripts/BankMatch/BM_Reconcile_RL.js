@@ -51,8 +51,7 @@ define([
             subsidiary:  r.getValue(SF.SUBSIDIARY),
             tolAmt:      parseFloat(r.getValue(SF.TOLERANCE_AMT))   || 0.01,
             tolDays:     parseInt(r.getValue(SF.TOLERANCE_DAYS), 10) || 5,
-            approver:    r.getValue(SF.APPROVER),
-            notifyEmail: r.getValue(SF.NOTIFY_EMAIL)
+            approver:    r.getValue(SF.APPROVER)
         };
     }
 
@@ -115,28 +114,7 @@ define([
             propRec.setValue({ fieldId: PF.APPROVER, value: settings.approver });
         }
 
-        var propId = propRec.save();
-
-        // Notify approver
-        var notifyEmail = (settings && settings.notifyEmail) || '';
-        if (!notifyEmail && settings && settings.approver) {
-            try {
-                var emp = record.load({ type: record.Type.EMPLOYEE, id: settings.approver });
-                notifyEmail = emp.getValue('email');
-            } catch (e) { /* ignore */ }
-        }
-        if (notifyEmail) {
-            engine.notifyApprover({
-                approverEmail: notifyEmail,
-                proposalId:    propId,
-                bankRef:       line.reference || '—',
-                bankAmt:       line.amount,
-                bankDate:      line.date,
-                nsRef:         cand.reference || '—',
-                type:          isCredit ? 'Customer Payment' : 'Bill Payment'
-            });
-        }
-        return propId;
+        return propRec.save();
     }
 
     // ── GET handler ───────────────────────────────────────────────────────

@@ -25,7 +25,6 @@ define([], function () {
             TOLERANCE_AMT:   'custrecord_bm_tolerance_amt',   // CURRENCY
             TOLERANCE_DAYS:  'custrecord_bm_tolerance_days',  // INTEGER
             APPROVER:        'custrecord_bm_approver',        // SELECT → Employee
-            NOTIFY_EMAIL:    'custrecord_bm_notify_email',    // EMAIL
             AUTO_SUGGEST:    'custrecord_bm_auto_suggest'     // CHECKBOX
         },
 

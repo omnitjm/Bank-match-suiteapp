@@ -64,7 +64,6 @@ define([
             tolAmt:      parseFloat(r.getValue(SF.TOLERANCE_AMT))   || 0.01,
             tolDays:     parseInt(r.getValue(SF.TOLERANCE_DAYS), 10) || 5,
             approver:    r.getValue(SF.APPROVER),
-            notifyEmail: r.getValue(SF.NOTIFY_EMAIL),
             autoSuggest: r.getValue(SF.AUTO_SUGGEST) === 'T'
         };
     }
@@ -551,27 +550,6 @@ define([
             if (settings && settings.approver) propRec.setValue({ fieldId: PF.APPROVER, value: settings.approver });
 
             var propId = propRec.save();
-
-            // Notify approver
-            var notifyEmail = (settings && settings.notifyEmail) || '';
-            if (!notifyEmail && settings && settings.approver) {
-                try {
-                    var emp = record.load({ type: record.Type.EMPLOYEE, id: settings.approver });
-                    notifyEmail = emp.getValue('email');
-                } catch (e) { /* ignore */ }
-            }
-            if (notifyEmail) {
-                engine.notifyApprover({
-                    approverEmail: notifyEmail,
-                    proposalId:    propId,
-                    bankRef:       bankRef || '—',
-                    bankAmt:       bankAmount,
-                    bankDate:      bankDate,
-                    nsRef:         nsRef   || '—',
-                    type:          TYPE_LABELS[String(txnType)] || txnType
-                });
-            }
-
             log.audit('BM_Main_SL', 'Proposal ' + propId + ' created');
             _redirect(context, 'Proposal submitted for approval. ' +
                 'After approval, return to Match Bank Data to complete the reconciliation.');

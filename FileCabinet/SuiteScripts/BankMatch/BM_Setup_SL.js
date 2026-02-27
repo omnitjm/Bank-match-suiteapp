@@ -42,7 +42,6 @@ define([
                 tolAmt:      row.getValue(C.SETTINGS_FIELDS.TOLERANCE_AMT),
                 tolDays:     row.getValue(C.SETTINGS_FIELDS.TOLERANCE_DAYS),
                 approver:    row.getValue(C.SETTINGS_FIELDS.APPROVER),
-                notifyEmail: row.getValue(C.SETTINGS_FIELDS.NOTIFY_EMAIL),
                 autoSuggest: row.getValue(C.SETTINGS_FIELDS.AUTO_SUGGEST)
             };
         }
@@ -134,7 +133,8 @@ define([
         infoField.defaultValue =
             '<div style="padding:8px 0;color:#555;font-size:12px;">' +
             '&#9432;&nbsp; Approval is <strong>always required</strong> before any reconciliation ' +
-            'is applied. The approver below will receive an email for each pending proposal.' +
+            'is applied. The approver opens pending proposals in the Bank Match dashboard and sets ' +
+            'Status to <strong>Approved</strong>.' +
             '</div>';
 
         var fldApprover = form.addField({
@@ -145,14 +145,6 @@ define([
             container: 'grp_approval'
         });
         fldApprover.isMandatory = true;
-
-        var fldEmail = form.addField({
-            id:        C.SETTINGS_FIELDS.NOTIFY_EMAIL,
-            type:      ui.FieldType.EMAIL,
-            label:     'Notification Email',
-            container: 'grp_approval'
-        });
-        fldEmail.helpText = 'Override email address for approval notifications. Leave blank to use the approver\'s NetSuite email.';
 
         // ─ Set current values if settings exist ─────────────────────────────
         if (settings) {
@@ -165,7 +157,6 @@ define([
             fldTolAmt.defaultValue     = settings.tolAmt || '0.01';
             fldTolDays.defaultValue    = settings.tolDays || '5';
             fldApprover.defaultValue   = settings.approver;
-            fldEmail.defaultValue      = settings.notifyEmail;
             fldAutoSuggest.defaultValue = settings.autoSuggest === 'T' ? 'T' : 'F';
         }
 
@@ -182,7 +173,6 @@ define([
         values[C.SETTINGS_FIELDS.TOLERANCE_AMT]   = params[C.SETTINGS_FIELDS.TOLERANCE_AMT];
         values[C.SETTINGS_FIELDS.TOLERANCE_DAYS]  = params[C.SETTINGS_FIELDS.TOLERANCE_DAYS];
         values[C.SETTINGS_FIELDS.APPROVER]        = params[C.SETTINGS_FIELDS.APPROVER];
-        values[C.SETTINGS_FIELDS.NOTIFY_EMAIL]    = params[C.SETTINGS_FIELDS.NOTIFY_EMAIL] || '';
         values[C.SETTINGS_FIELDS.AUTO_SUGGEST]    = params[C.SETTINGS_FIELDS.AUTO_SUGGEST] || 'F';
 
         if (settingsId) {
