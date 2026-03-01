@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  custbody_bank_transaction_id
+  ────────────────────────────────────────────────────────────────────────────
+  Custom transaction body field used by Bank Match to store the normalized
+  bank statement Transaction ID on NetSuite transactions.
+
+  Purpose:
+    Populated by BM_Proposal_UE.js when a proposal is approved. The value
+    is normalizeTxnId(bankRef) — trimmed, uppercased, whitespace-collapsed.
+
+  Native Reconciliation Rule usage:
+    Configure a NetSuite Reconciliation Rule that matches:
+      Amount equals Bank Line Amount
+      AND custbody_bank_transaction_id equals Bank Line Transaction ID
+
+    After Bank Match creates proposals and they are approved, run
+    "Run Reconciliation Rules" on the Match Bank Data page — all matched
+    transactions will be automatically reconciled. Then click Submit.
+
+  IMPORTANT: tranid is NEVER written by Bank Match scripts. This field is the
+  sole identifier used for bank-to-NS matching.
+
+  Applies to: Customer Payment, Vendor Payment, Deposit, Check, Journal Entry
+-->
+<transactionbodycustomfield scriptid="custbody_bank_transaction_id">
+  <fieldtype>TEXT</fieldtype>
+  <label>Bank Transaction ID</label>
+  <ismandatory>F</ismandatory>
+  <storevalue>T</storevalue>
+  <showinlist>F</showinlist>
+  <isformula>F</isformula>
+  <encryptatrest>F</encryptatrest>
+  <helptext>Bank statement transaction identifier set by Bank Match. Used by Reconciliation Rules to match bank lines to NetSuite transactions. Do not edit manually.</helptext>
+
+  <!-- Transaction type applicability -->
+  <appliescustomerpayment>T</appliescustomerpayment>
+  <appliesvendorpayment>T</appliesvendorpayment>
+  <appliesdeposit>T</appliesdeposit>
+  <appliescheck>T</appliescheck>
+  <appliesjournal>T</appliesjournal>
+  <appliescreditmemo>F</appliescreditmemo>
+  <appliescustomerrefund>F</appliescustomerrefund>
+  <appliesvendorrefund>F</appliesvendorrefund>
+  <appliescashsale>F</appliescashsale>
+  <appliesexpensereport>F</appliesexpensereport>
+</transactionbodycustomfield>

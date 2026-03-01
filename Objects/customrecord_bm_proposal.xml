@@ -183,6 +183,60 @@
       <helptext>Internal ID of the bank statement line from NetSuite's native Match Bank Data module.</helptext>
     </customrecordcustomfield>
 
+    <!-- ── Idempotency key ──────────────────────────────────────────────── -->
+    <customrecordcustomfield scriptid="custrecord_bm_idempotency_key">
+      <fieldtype>TEXT</fieldtype>
+      <label>Idempotency Key</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Deduplication key: bankLineId or date|amount|ref composite. Prevents duplicate proposals for the same bank line.</helptext>
+    </customrecordcustomfield>
+
+    <!-- ── Apply locking & result tracking ─────────────────────────────── -->
+    <customrecordcustomfield scriptid="custrecord_bm_apply_status">
+      <fieldtype>TEXT</fieldtype>
+      <label>Apply Status</label>
+      <ismandatory>F</ismandatory>
+      <defaultvalue>Pending</defaultvalue>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Internal apply-execution status: Pending | Processing | Applied | Failed. Do not edit manually.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_apply_attempts">
+      <fieldtype>INTEGER</fieldtype>
+      <label>Apply Attempts</label>
+      <ismandatory>F</ismandatory>
+      <defaultvalue>0</defaultvalue>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Number of times the apply logic has been executed for this proposal.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_apply_error">
+      <fieldtype>TEXTAREA</fieldtype>
+      <label>Apply Error</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Last error message from the apply execution. Populated when Apply Status is Failed.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_applied_txn_id">
+      <fieldtype>TEXT</fieldtype>
+      <label>Applied NS Transaction ID</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Internal ID of the NetSuite transaction created or updated when this proposal was applied.</helptext>
+    </customrecordcustomfield>
+
   </fields>
   <hierarchytype>NONE</hierarchytype>
   <isinactive>F</isinactive>

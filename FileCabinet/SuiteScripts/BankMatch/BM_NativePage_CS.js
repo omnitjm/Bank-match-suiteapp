@@ -6,37 +6,30 @@
  *
  * Bank Match – Native Page Enhancement
  *
- * This client script is deployed globally (all roles, all employees).
- * It detects when the user is on the NetSuite "Match Bank Data" page and
- * injects our Bank Match button bar directly into that native page.
+ * Deployed globally (all roles, all employees). Detects when the user is on
+ * the NetSuite "Match Bank Data" page and injects our button bar.
  *
- * ─── What the injected buttons do ────────────────────────────────────────────
- *   [⚡ Auto-Reconcile]   Calls our RESTlet which reads all unmatched bank lines
- *                         for the current account, runs the scoring engine, and
- *                         creates proposals for the approver.
+ * ─── DOM injection strategy ───────────────────────────────────────────────────
+ * Uses MutationObserver to wait for the native page content to appear, then
+ * injects exactly once (guarded by element ID). Observer disconnects after
+ * injection or after a 10-second safety timeout.
  *
- *   [📋 Pending Approvals (N)]   Opens our Suitelet dashboard filtered to
- *                                pending proposals — the approver can act there.
+ * ─── Auto Match batching ─────────────────────────────────────────────────────
+ * Calls propose_all with limit=100 repeatedly until done=true. Status message
+ * updates after each batch. canRun=false from status endpoint disables the button.
  *
- *   [⚙ BM Settings]      Opens the Bank Match setup page.
- *
- * ─── How injection works ─────────────────────────────────────────────────────
- * The native Match Bank Data page is at:
- *   /app/accounting/transactions/bank/reconciliation/matchbankdata.nl
- *
- * pageInit fires on every page load. If we're NOT on that URL we return
- * immediately (no performance impact on other pages).
- *
- * If we ARE on the page, we wait for the DOM to be ready, then find the
- * native button/header area and prepend our button bar.
+ * ─── User flow ───────────────────────────────────────────────────────────────
+ *   1. Click [Auto Match]         → creates proposals for all unmatched lines
+ *   2. Approve proposals          → Bank Match stamps custbody_bank_transaction_id
+ *   3. Click [Run Recon Rules]    → native rules match on that field automatically
+ *   4. Click [Submit]             → reconciliation complete
  */
 define(['N/url', 'N/https'], function (url, https) {
     'use strict';
 
-    // ── Target page detection ─────────────────────────────────────────────
     var MATCH_BANK_DATA_PATH = 'matchbankdata.nl';
+    var BAR_ID               = 'bm-native-bar';
 
-    // ── Script / deployment IDs ───────────────────────────────────────────
     var RESTLET_SCRIPT  = 'customscript_bm_reconcile_rl';
     var RESTLET_DEPLOY  = 'customdeploy_bm_reconcile_rl';
     var MAIN_SL_SCRIPT  = 'customscript_bm_main_sl';
@@ -65,10 +58,10 @@ define(['N/url', 'N/https'], function (url, https) {
         'text-decoration:none;'
     ].join('');
 
-    var BTN_PRIMARY = BTN_BASE +
-        'background:#1565c0;color:#fff;';
-    var BTN_SECONDARY = BTN_BASE +
-        'background:#fff;color:#333;border:1px solid #ccc;';
+    var BTN_PRIMARY   = BTN_BASE + 'background:#1565c0;color:#fff;';
+    var BTN_SECONDARY = BTN_BASE + 'background:#fff;color:#333;border:1px solid #ccc;';
+    var BTN_DISABLED  = BTN_BASE + 'background:#bbb;color:#fff;cursor:not-allowed;';
+
     var BTN_BADGE = [
         'background:#e53935;color:#fff;',
         'border-radius:10px;padding:0 5px;',
@@ -79,11 +72,11 @@ define(['N/url', 'N/https'], function (url, https) {
     var LOGO_STYLE = 'font-size:11px;color:#1565c0;font-weight:700;' +
                      'padding-right:8px;border-right:1px solid #c5cee0;margin-right:4px;';
 
-    // ── Build RESTlet URL ─────────────────────────────────────────────────
+    // ── URL helpers ───────────────────────────────────────────────────────
     function _restletUrl(action, extra) {
         var base = url.resolveScript({
-            scriptId:     RESTLET_SCRIPT,
-            deploymentId: RESTLET_DEPLOY,
+            scriptId:          RESTLET_SCRIPT,
+            deploymentId:      RESTLET_DEPLOY,
             returnExternalUrl: false
         });
         var qs = '&action=' + encodeURIComponent(action);
@@ -95,11 +88,10 @@ define(['N/url', 'N/https'], function (url, https) {
         return base + qs;
     }
 
-    // ── Build Suitelet URL ────────────────────────────────────────────────
     function _slUrl(scriptId, deployId, params) {
         var u = url.resolveScript({
-            scriptId:     scriptId,
-            deploymentId: deployId,
+            scriptId:          scriptId,
+            deploymentId:      deployId,
             returnExternalUrl: false
         });
         if (params) {
@@ -110,181 +102,271 @@ define(['N/url', 'N/https'], function (url, https) {
         return u;
     }
 
-    // ── Extract account ID from native page URL ───────────────────────────
     function _getAccountFromUrl() {
-        var match = window.location.href.match(/[?&]account=(\d+)/);
-        return match ? match[1] : null;
+        var m = window.location.href.match(/[?&]account=(\d+)/);
+        return m ? m[1] : null;
     }
 
-    // ── Create the button bar element ─────────────────────────────────────
-    function _buildBar(pendingCount) {
+    // ── Build button bar ──────────────────────────────────────────────────
+    function _buildBar(pendingCount, canRun, gateMessage) {
         var bar = document.createElement('div');
-        bar.id    = 'bm-native-bar';
+        bar.id            = BAR_ID;
         bar.style.cssText = BAR_STYLE;
 
-        // Logo label
-        var logo  = document.createElement('span');
+        var logo = document.createElement('span');
         logo.style.cssText = LOGO_STYLE;
-        logo.textContent   = '⚡ BANK MATCH';
+        logo.textContent   = 'AUTO MATCH';
         bar.appendChild(logo);
 
-        // Auto-Reconcile button
+        // Primary action: Auto Match
         var btnAuto = document.createElement('button');
-        btnAuto.id  = 'bm-btn-auto';
-        btnAuto.style.cssText = BTN_PRIMARY;
-        btnAuto.textContent   = '⚡ Auto-Reconcile';
-        btnAuto.title = 'Run the Bank Match engine on all unmatched bank lines and send proposals for approval';
-        btnAuto.addEventListener('click', function (e) {
-            e.preventDefault();
-            _runAutoReconcile(btnAuto);
-        });
+        btnAuto.id            = 'bm-btn-auto';
+        btnAuto.style.cssText = canRun ? BTN_PRIMARY : BTN_DISABLED;
+        btnAuto.textContent   = 'Auto Match';
+        btnAuto.disabled      = !canRun;
+        btnAuto.title = canRun
+            ? 'Propose matches for all unmatched bank lines and send for approval'
+            : (gateMessage || 'Bank Match is not ready');
+        if (canRun) {
+            btnAuto.addEventListener('click', function (e) {
+                e.preventDefault();
+                _runAutoMatch(btnAuto);
+            });
+        }
         bar.appendChild(btnAuto);
 
-        // Pending approvals button (with badge)
+        // Pending approvals
         var btnPending = document.createElement('a');
-        btnPending.href  = _slUrl(MAIN_SL_SCRIPT, MAIN_SL_DEPLOY, { tab: 'pending' });
-        btnPending.target = '_blank';
+        btnPending.id          = 'bm-btn-pending';
+        btnPending.href        = _slUrl(MAIN_SL_SCRIPT, MAIN_SL_DEPLOY, { tab: 'pending' });
+        btnPending.target      = '_blank';
         btnPending.style.cssText = BTN_SECONDARY;
-        btnPending.innerHTML = '📋 Pending Approvals' +
+        btnPending.innerHTML   = 'Pending Approvals' +
             (pendingCount > 0
                 ? '<span style="' + BTN_BADGE + '">' + pendingCount + '</span>'
                 : '');
-        btnPending.id = 'bm-btn-pending';
         bar.appendChild(btnPending);
 
-        // Settings button
+        // Settings
         var btnSetup = document.createElement('a');
-        btnSetup.href   = _slUrl(SETUP_SL_SCRIPT, SETUP_SL_DEPLOY, {});
-        btnSetup.target = '_blank';
+        btnSetup.href        = _slUrl(SETUP_SL_SCRIPT, SETUP_SL_DEPLOY, {});
+        btnSetup.target      = '_blank';
         btnSetup.style.cssText = BTN_SECONDARY;
-        btnSetup.textContent   = '⚙ BM Settings';
+        btnSetup.textContent = 'BM Settings';
         bar.appendChild(btnSetup);
 
-        // Status message area
+        // Status message (right-aligned)
         var msg = document.createElement('span');
-        msg.id  = 'bm-status-msg';
+        msg.id            = 'bm-status-msg';
         msg.style.cssText = 'margin-left:auto;font-size:12px;color:#555;';
+        if (!canRun && gateMessage) msg.textContent = gateMessage;
         bar.appendChild(msg);
 
         return bar;
     }
 
-    // ── Run auto-reconcile via RESTlet ────────────────────────────────────
-    function _runAutoReconcile(btnEl) {
+    // ── Auto Match: paginated batching loop ───────────────────────────────
+    function _runAutoMatch(btnEl) {
         var accountId = _getAccountFromUrl();
-        var msgEl = document.getElementById('bm-status-msg');
+        var msgEl     = document.getElementById('bm-status-msg');
 
-        btnEl.disabled = true;
-        btnEl.textContent = '⏳ Matching…';
-        if (msgEl) msgEl.textContent = '';
+        btnEl.disabled      = true;
+        btnEl.style.cssText = BTN_DISABLED;
+        btnEl.textContent   = 'Matching…';
+        if (msgEl) { msgEl.textContent = ''; msgEl.style.color = '#555'; }
 
-        var rlUrl = _restletUrl('propose_all', accountId ? { account: accountId } : {});
+        var totalCreated  = 0;
+        var totalSkipped  = 0;
+        var totalReasons  = {};
 
-        https.get.promise({ url: rlUrl })
-            .then(function (resp) {
-                try {
-                    var data = JSON.parse(resp.body);
-                    if (data.ok) {
-                        btnEl.textContent = '✓ Done';
-                        btnEl.style.background = '#2e7d32';
-
-                        if (msgEl) msgEl.textContent = data.message || (data.proposed + ' proposal(s) created');
-
-                        // Update pending badge
-                        _refreshPendingBadge(data.pendingCount);
-
-                        // Reset button after 4s
-                        setTimeout(function () {
-                            btnEl.disabled = false;
-                            btnEl.textContent = '⚡ Auto-Reconcile';
-                            btnEl.style.background = '#1565c0';
-                        }, 4000);
-                    } else {
-                        throw new Error(data.error || 'Unknown error');
-                    }
-                } catch (parseErr) {
-                    _showError(btnEl, msgEl, 'Response error: ' + parseErr.message);
-                }
-            })
-            .catch(function (err) {
-                _showError(btnEl, msgEl, err.message || String(err));
+        function _mergeReasons(src) {
+            if (!src) return;
+            Object.keys(src).forEach(function (k) {
+                totalReasons[k] = (totalReasons[k] || 0) + src[k];
             });
-    }
-
-    function _showError(btnEl, msgEl, errorText) {
-        btnEl.disabled    = false;
-        btnEl.textContent = '⚡ Auto-Reconcile';
-        btnEl.style.background = '#1565c0';
-        if (msgEl) {
-            msgEl.textContent  = '⚠ ' + errorText;
-            msgEl.style.color  = '#c62828';
         }
-    }
 
-    function _refreshPendingBadge(count) {
-        var btn = document.getElementById('bm-btn-pending');
-        if (!btn) return;
-        btn.innerHTML = '📋 Pending Approvals' +
-            (count > 0
-                ? '<span style="' + BTN_BADGE + '">' + count + '</span>'
-                : '');
-    }
+        function _formatReasons(reasons) {
+            var labels = {
+                existing_proposal:           'already proposed',
+                no_candidate_over_threshold: 'no match found',
+                settings_missing:            'settings missing',
+                creation_error:              'error'
+            };
+            return Object.keys(reasons)
+                .filter(function (k) { return reasons[k] > 0; })
+                .map(function (k) { return reasons[k] + ' ' + (labels[k] || k); })
+                .join(', ');
+        }
 
-    // ── Inject bar into the native page ───────────────────────────────────
-    function _injectBar(pendingCount) {
-        if (document.getElementById('bm-native-bar')) return; // already injected
+        function _nextBatch(offset) {
+            var batchNum = Math.floor(offset / 100) + 1;
+            if (msgEl) msgEl.textContent = 'Batch ' + batchNum + ' – matching…';
 
-        var bar = _buildBar(pendingCount || 0);
+            var extra = { limit: 100, offset: offset };
+            if (accountId) extra.account = accountId;
 
-        // Try to insert before the native page's main content area.
-        // NetSuite's banking pages typically have a header div we can anchor to.
-        var targets = [
-            document.querySelector('#main_form'),
-            document.querySelector('.ns-page-header'),
-            document.querySelector('#div__bodytag'),
-            document.querySelector('body > div:not([style*="display:none"]):first-child'),
-            document.body
-        ];
+            https.get.promise({ url: _restletUrl('propose_all', extra) })
+                .then(function (resp) {
+                    var data;
+                    try { data = JSON.parse(resp.body); }
+                    catch (e) { return _handleError('Response parse error: ' + e.message); }
 
-        var inserted = false;
-        for (var i = 0; i < targets.length; i++) {
-            if (targets[i]) {
-                targets[i].insertBefore(bar, targets[i].firstChild);
-                inserted = true;
-                break;
+                    if (!data.ok) return _handleError(data.error || 'Unknown error');
+
+                    totalCreated += (data.created || 0);
+                    totalSkipped += (data.skipped || 0);
+                    _mergeReasons(data.skippedReasons);
+
+                    if (data.done) {
+                        _handleDone();
+                    } else {
+                        _nextBatch(data.nextOffset || (offset + 100));
+                    }
+                })
+                .catch(function (err) {
+                    _handleError(err.message || String(err));
+                });
+        }
+
+        function _handleDone() {
+            var summary = 'Created ' + totalCreated;
+            if (totalSkipped > 0) {
+                summary += ', skipped ' + totalSkipped;
+                var breakdown = _formatReasons(totalReasons);
+                if (breakdown) summary += ' (' + breakdown + ')';
             }
+
+            btnEl.style.cssText = BTN_BASE + 'background:#2e7d32;color:#fff;';
+            btnEl.textContent   = 'Done';
+            btnEl.disabled      = false;
+            if (msgEl) { msgEl.textContent = summary; msgEl.style.color = '#333'; }
+
+            _refreshPendingBadge();
+
+            setTimeout(function () {
+                btnEl.style.cssText = BTN_PRIMARY;
+                btnEl.textContent   = 'Auto Match';
+            }, 5000);
         }
 
-        if (!inserted) document.body.insertBefore(bar, document.body.firstChild);
+        function _handleError(errorText) {
+            btnEl.disabled      = false;
+            btnEl.style.cssText = BTN_PRIMARY;
+            btnEl.textContent   = 'Auto Match';
+            if (msgEl) { msgEl.textContent = errorText; msgEl.style.color = '#c62828'; }
+        }
+
+        _nextBatch(0);
     }
 
-    // ── Fetch status and inject ───────────────────────────────────────────
-    function _initOnBankingPage() {
-        // Get pending count from RESTlet to show badge immediately
-        var statusUrl = _restletUrl('status');
-        https.get.promise({ url: statusUrl })
+    // ── Refresh pending badge from status endpoint ─────────────────────────
+    function _refreshPendingBadge() {
+        https.get.promise({ url: _restletUrl('status') })
             .then(function (resp) {
                 try {
-                    var data = JSON.parse(resp.body);
-                    _injectBar(data.pendingCount || 0);
-                } catch (e) {
-                    _injectBar(0);
-                }
+                    var data  = JSON.parse(resp.body);
+                    var btn   = document.getElementById('bm-btn-pending');
+                    if (!btn) return;
+                    var count = data.pendingCount || 0;
+                    btn.innerHTML = 'Pending Approvals' +
+                        (count > 0
+                            ? '<span style="' + BTN_BADGE + '">' + count + '</span>'
+                            : '');
+                } catch (e) { /* ignore */ }
+            })
+            .catch(function () { /* ignore */ });
+    }
+
+    // ── Find the best DOM anchor to prepend bar into ───────────────────────
+    function _findAnchor() {
+        var selectors = [
+            '#main_form',
+            '.ns-page-header',
+            '#div__bodytag',
+            'body > div:not([style*="display:none"])'
+        ];
+        for (var i = 0; i < selectors.length; i++) {
+            var el = document.querySelector(selectors[i]);
+            if (el) return el;
+        }
+        return null;
+    }
+
+    // ── Inject bar (called once status is fetched) ─────────────────────────
+    function _injectBar(pendingCount, canRun, gateMessage) {
+        if (document.getElementById(BAR_ID)) return;
+        var bar    = _buildBar(pendingCount || 0, canRun !== false, gateMessage || '');
+        var anchor = _findAnchor() || document.body;
+        anchor.insertBefore(bar, anchor.firstChild);
+    }
+
+    // ── Fetch status then inject ───────────────────────────────────────────
+    function _initOnBankingPage() {
+        https.get.promise({ url: _restletUrl('status') })
+            .then(function (resp) {
+                var pendingCount = 0;
+                var canRun       = true;
+                var gateMessage  = '';
+                try {
+                    var data    = JSON.parse(resp.body);
+                    pendingCount = data.pendingCount || 0;
+                    canRun      = data.canRun !== false;
+                    gateMessage = data.message || '';
+                } catch (e) { /* use defaults */ }
+                _injectBar(pendingCount, canRun, gateMessage);
             })
             .catch(function () {
-                _injectBar(0);
+                _injectBar(0, true, '');
             });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  Client Script entry point
-    // ═══════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    //  Client Script entry point — MutationObserver injection
+    // ══════════════════════════════════════════════════════════════════════
     function pageInit() {
-        // Fast exit: only act on the native Match Bank Data page
+        // Fast exit: not the Match Bank Data page
         if (window.location.href.indexOf(MATCH_BANK_DATA_PATH) < 0) return;
+        if (document.getElementById(BAR_ID)) return;
 
-        // Wait briefly for the native page's DOM to settle before injecting
-        setTimeout(_initOnBankingPage, 600);
+        var injected = false;
+
+        function _tryInject() {
+            if (injected || document.getElementById(BAR_ID)) {
+                injected = true;
+                return true;
+            }
+            // Only inject once a suitable anchor exists
+            if (!_findAnchor()) return false;
+            injected = true;
+            _initOnBankingPage();
+            return true;
+        }
+
+        // Attempt immediately — the anchor may already be present
+        if (_tryInject()) return;
+
+        // Watch for DOM mutations (native page loads content asynchronously)
+        var observer  = null;
+        var stopTimer = null;
+
+        observer = new MutationObserver(function () {
+            if (_tryInject()) {
+                observer.disconnect();
+                clearTimeout(stopTimer);
+            }
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        // Safety net: inject unconditionally after 10 seconds
+        stopTimer = setTimeout(function () {
+            observer.disconnect();
+            if (!injected) {
+                injected = true;
+                _initOnBankingPage();
+            }
+        }, 10000);
     }
 
     return { pageInit: pageInit };

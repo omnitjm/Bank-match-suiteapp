@@ -6,63 +6,100 @@
  *
  * User Event on customrecord_bm_proposal.
  *
- * beforeLoad  – adds an info banner showing the approval requirement.
- * afterSubmit – when status changes to APPROVED, executes the reconciliation.
- *               Updates the bank transaction status to RECONCILED on success.
- *               Captures any errors in the ERROR_MSG field and sets status FAILED.
+ * afterSubmit – when status changes to APPROVED, executes the reconciliation
+ *               with full idempotency and concurrency protection:
  *
- * NOTE: The actual matching engine call (applyCustomerPayment / applyBillPayment)
- *       is made with the privileged context of the script deployment (Admin role).
+ *   1. Early-exit if apply_status is already Processing or Applied.
+ *   2. Set apply_status = Processing, increment apply_attempts.
+ *   3. Execute matching engine (applyCustomerPayment / applyBillPayment).
+ *   4. Set custbody_bank_transaction_id on the resulting NS transaction.
+ *      Value is normalizeTxnId(bankRef) — trimmed, uppercased.
+ *   5. Mark proposal Applied (or Failed) and record the NS txn ID.
+ *
+ * IMPORTANT:
+ *   tranid is NEVER written here.
+ *   custbody_bank_transaction_id is the sole field used for bank matching.
+ *   After proposals are applied, the user runs "Run Reconciliation Rules"
+ *   then "Submit" on the native Match Bank Data page — no manual re-matching.
  */
 define([
     'N/record',
     'N/search',
     'N/log',
-    'N/runtime',
     './BM_Constants',
     './BM_MatchEngine'
-], function (record, search, log, runtime, C, engine) {
+], function (record, search, log, C, engine) {
     'use strict';
 
     var PF = C.PROPOSAL_FIELDS;
     var PS = C.PROPOSAL_STATUS;
+    var AS = C.APPLY_STATUS;
     var TS = C.TXN_STATUS;
+    var BF = C.BODY_FIELD;
 
     // ── beforeLoad ────────────────────────────────────────────────────────
     function beforeLoad(context) {
-        // Only enrich the view/edit form
         if (context.type !== context.UserEventType.VIEW &&
             context.type !== context.UserEventType.EDIT) return;
-
-        var status = context.newRecord.getValue(PF.STATUS);
-        if (status === PS.PENDING) {
-            // The form header message is shown via the record's page init
-            // (NetSuite shows the record normally – approver changes status field)
-        }
+        // Approver edits the Status field directly on the record.
     }
 
     // ── afterSubmit ───────────────────────────────────────────────────────
     function afterSubmit(context) {
-        // Only act on Edit/Create, not Delete
         if (context.type === context.UserEventType.DELETE) return;
 
-        var newRec = context.newRecord;
+        var newRec    = context.newRecord;
         var newStatus = newRec.getValue(PF.STATUS);
 
-        // Nothing to do unless status just became APPROVED
+        // Only proceed when status just became APPROVED
         if (newStatus !== PS.APPROVED) return;
 
-        // Check old status – we only want to fire once
+        // Prevents re-entry when our own submitFields calls fire the UE again
+        // (those calls change apply_status / proposal_status, not back to APPROVED)
         if (context.oldRecord) {
             var oldStatus = context.oldRecord.getValue(PF.STATUS);
             if (oldStatus === PS.APPROVED || oldStatus === PS.APPLIED) return;
         }
 
-        log.audit('BM_Proposal_UE', 'Proposal ' + newRec.id + ' approved – executing reconciliation');
+        var proposalId = newRec.id;
+        log.audit('BM_Proposal_UE', 'Proposal ' + proposalId + ' approved – starting apply');
 
-        // Gather proposal data
+        // ── Concurrency lock ──────────────────────────────────────────────
+        // Load a fresh copy to check apply_status at the moment we act.
+        // Guards against two simultaneous approval actions on the same proposal.
+        var freshRec;
+        try {
+            freshRec = record.load({ type: C.RECORDS.PROPOSAL, id: proposalId });
+        } catch (loadErr) {
+            log.error('BM_Proposal_UE', 'Could not load proposal for lock check: ' + loadErr.message);
+            return;
+        }
+
+        var freshApplyStatus = freshRec.getValue(PF.APPLY_STATUS);
+        if (freshApplyStatus === AS.APPLIED) {
+            log.audit('BM_Proposal_UE', 'Proposal ' + proposalId + ' already Applied – skipping');
+            return;
+        }
+        if (freshApplyStatus === AS.PROCESSING) {
+            log.audit('BM_Proposal_UE', 'Proposal ' + proposalId + ' already Processing – skipping');
+            return;
+        }
+
+        // Claim the lock
+        var currentAttempts = parseInt(freshRec.getValue(PF.APPLY_ATTEMPTS), 10) || 0;
+        record.submitFields({
+            type:    C.RECORDS.PROPOSAL,
+            id:      proposalId,
+            values:  {
+                [PF.APPLY_STATUS]:   AS.PROCESSING,
+                [PF.APPLY_ATTEMPTS]: currentAttempts + 1
+            },
+            options: { ignoreMandatoryFields: true }
+        });
+
+        // ── Gather proposal data ──────────────────────────────────────────
         var proposal = {
-            proposalId:  newRec.id,
+            proposalId:  proposalId,
             nsId:        newRec.getValue(PF.NS_RECORD_ID),
             nsType:      newRec.getValue(PF.NS_RECORD_TYPE),
             txnType:     newRec.getValue(PF.TXN_TYPE),
@@ -74,46 +111,77 @@ define([
             bankTxnId:   newRec.getValue(PF.BANK_TXN)
         };
 
+        // Normalized bank reference — written to custbody_bank_transaction_id
+        var normRef   = C.normalizeTxnId(proposal.bankRef);
         var errorMsg  = null;
         var appliedId = null;
 
+        // ── Execute reconciliation ────────────────────────────────────────
         try {
             if (String(proposal.txnType) === String(C.TXN_TYPE.CUSTOMER_PAYMENT)) {
-                // Reconcile customer payment → invoice
+
+                // Creates a new Customer Payment and applies it to the invoice
                 appliedId = engine.applyCustomerPayment(proposal);
 
+                // Stamp custbody_bank_transaction_id so Reconciliation Rules can match
+                if (normRef && appliedId) {
+                    record.submitFields({
+                        type:    record.Type.CUSTOMER_PAYMENT,
+                        id:      appliedId,
+                        values:  { [BF.BANK_TXN_ID]: normRef },
+                        options: { enableSourcing: false, ignoreMandatoryFields: true }
+                    });
+                }
+
             } else if (String(proposal.txnType) === String(C.TXN_TYPE.BILL_PAYMENT)) {
-                // Reconcile bill payment (optional date adjustment)
+
+                // Optionally adjusts the Vendor Payment date
                 engine.applyBillPayment(proposal);
-                appliedId = proposal.nsId;
+                appliedId = String(proposal.nsId);
+
+                // Stamp custbody_bank_transaction_id on the existing Vendor Payment
+                if (normRef && appliedId) {
+                    record.submitFields({
+                        type:    'vendorpayment',
+                        id:      appliedId,
+                        values:  { [BF.BANK_TXN_ID]: normRef },
+                        options: { enableSourcing: false, ignoreMandatoryFields: true }
+                    });
+                }
 
             } else {
                 throw new Error('Unknown transaction type: ' + proposal.txnType);
             }
+
         } catch (e) {
             errorMsg = e.message;
-            log.error('BM_Proposal_UE', 'Reconciliation failed for proposal ' + newRec.id + ': ' + e.message);
+            log.error('BM_Proposal_UE',
+                'Reconciliation failed for proposal ' + proposalId + ': ' + e.message);
         }
 
-        // Update proposal record with result
-        var updateValues = {};
+        // ── Write result back to proposal ─────────────────────────────────
+        var resultValues = {};
         if (errorMsg) {
-            updateValues[PF.STATUS]    = PS.FAILED;
-            updateValues[PF.ERROR_MSG] = errorMsg;
+            resultValues[PF.STATUS]       = PS.FAILED;
+            resultValues[PF.ERROR_MSG]    = errorMsg;
+            resultValues[PF.APPLY_STATUS] = AS.FAILED;
+            resultValues[PF.APPLY_ERROR]  = errorMsg;
         } else {
-            updateValues[PF.STATUS]       = PS.APPLIED;
-            updateValues[PF.APPLIED_DATE] = new Date();
-            updateValues[PF.ERROR_MSG]    = '';
+            resultValues[PF.STATUS]         = PS.APPLIED;
+            resultValues[PF.APPLIED_DATE]   = new Date();
+            resultValues[PF.ERROR_MSG]      = '';
+            resultValues[PF.APPLY_STATUS]   = AS.APPLIED;
+            resultValues[PF.APPLIED_TXN_ID] = String(appliedId || '');
         }
 
         record.submitFields({
             type:    C.RECORDS.PROPOSAL,
-            id:      newRec.id,
-            values:  updateValues,
+            id:      proposalId,
+            values:  resultValues,
             options: { ignoreMandatoryFields: true }
         });
 
-        // Update bank transaction status
+        // ── Update bank transaction status ────────────────────────────────
         if (!errorMsg && proposal.bankTxnId) {
             try {
                 var txnUpdate = {};
@@ -130,7 +198,7 @@ define([
         }
 
         log.audit('BM_Proposal_UE',
-            'Proposal ' + newRec.id + ' result: ' + (errorMsg ? 'FAILED' : 'APPLIED') +
+            'Proposal ' + proposalId + ' result: ' + (errorMsg ? 'FAILED' : 'APPLIED') +
             (appliedId ? ' (NS ID ' + appliedId + ')' : ''));
     }
 

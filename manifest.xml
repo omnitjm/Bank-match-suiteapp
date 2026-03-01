@@ -9,11 +9,12 @@
     The native module handles bank statement import (Phase 1).
     This SuiteApp automates the reconciliation (Phase 2):
 
-      • Injects an "Auto-Reconcile" button bar directly into the native Match Bank Data page
+      • Injects an "Auto Match" button bar directly into the native Match Bank Data page
       • Auto-scores and proposes matches (Customer Payments → Invoices, Vendor Payments)
       • Mandatory approval workflow – every proposal needs sign-off before execution
       • Bill Payment date adjustment – aligns NetSuite payment date to bank date
-      • After approval, applied transactions appear in Match Bank Data for final submission
+      • On approval: sets custbody_bank_transaction_id on the NS transaction (never writes tranid)
+      • After approval: user clicks Run Reconciliation Rules then Submit — no manual re-matching
 
     File overview
     ─────────────
@@ -48,6 +49,8 @@
     <object path="Objects/customlist_bm_prop_status.xml"/>
     <object path="Objects/customlist_bm_txn_status.xml"/>
     <object path="Objects/customlist_bm_txn_type.xml"/>
+    <!-- Custom Transaction Body Field -->
+    <object path="Objects/customtransactionbodycustomfield_bank_txn_id.xml"/>
     <!-- Custom Records -->
     <object path="Objects/customrecord_bm_settings.xml"/>
     <object path="Objects/customrecord_bm_bank_txn.xml"/>

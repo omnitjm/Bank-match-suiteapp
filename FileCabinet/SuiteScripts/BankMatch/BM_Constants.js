@@ -9,7 +9,31 @@
 define([], function () {
     'use strict';
 
+    /**
+     * Normalize a bank transaction identifier for consistent matching.
+     * Trims whitespace, uppercases, and collapses internal runs of spaces.
+     * Never removes dashes or other characters — only normalizes whitespace.
+     *
+     * @param {string} str
+     * @returns {string}
+     */
+    function normalizeTxnId(str) {
+        if (!str) return '';
+        return String(str).trim().toUpperCase().replace(/\s+/g, ' ');
+    }
+
     return {
+
+        // ── Normalize helper ──────────────────────────────────────────────────
+        normalizeTxnId: normalizeTxnId,
+
+        // ── Custom Transaction Body Field ─────────────────────────────────────
+        // Applies to: Customer Payment, Vendor Payment, Deposit, Check, Journal Entry
+        // Used by native Reconciliation Rules to match bank lines to NS transactions.
+        // NEVER write to tranid — use this field instead.
+        BODY_FIELD: {
+            BANK_TXN_ID: 'custbody_bank_transaction_id'  // TEXT, stored value
+        },
 
         // ── Custom Record Script IDs ─────────────────────────────────────────
         RECORDS: {
@@ -41,23 +65,30 @@ define([], function () {
 
         // ── Match Proposal Record Field IDs ──────────────────────────────────
         PROPOSAL_FIELDS: {
-            BANK_TXN:      'custrecord_bm_prop_bank_txn',   // SELECT → customrecord_bm_bank_txn
-            TXN_TYPE:      'custrecord_bm_prop_txn_type',   // SELECT → customlist_bm_txn_type
-            NS_RECORD_TYPE:'custrecord_bm_prop_ns_type',    // TEXT  (invoice / vendorpayment)
-            NS_RECORD_ID:  'custrecord_bm_prop_ns_id',      // INTEGER
-            NS_RECORD_REF: 'custrecord_bm_prop_ns_ref',     // TEXT  (transaction number)
-            MATCH_AMOUNT:  'custrecord_bm_prop_match_amt',  // CURRENCY
-            MATCH_DATE:    'custrecord_bm_prop_match_date', // DATE   (NS record date)
-            STATUS:        'custrecord_bm_prop_status',     // SELECT → customlist_bm_prop_status
-            APPROVER:      'custrecord_bm_prop_approver',   // SELECT → Employee
-            ADJUST_DATE:   'custrecord_bm_prop_adj_date',   // CHECKBOX
-            NOTES:         'custrecord_bm_prop_notes',      // TEXTAREA
-            APPLIED_DATE:  'custrecord_bm_prop_applied_dt', // DATE
-            ERROR_MSG:     'custrecord_bm_prop_error_msg',  // TEXTAREA
-            BANK_AMOUNT:   'custrecord_bm_prop_bank_amt',   // CURRENCY
-            BANK_DATE:     'custrecord_bm_prop_bank_date',  // DATE
-            BANK_REF:      'custrecord_bm_prop_bank_ref',   // TEXT
-            BANK_LINE_ID:  'custrecord_bm_prop_bank_line'   // TEXT – native bank line ID
+            BANK_TXN:        'custrecord_bm_prop_bank_txn',    // SELECT → customrecord_bm_bank_txn
+            TXN_TYPE:        'custrecord_bm_prop_txn_type',    // SELECT → customlist_bm_txn_type
+            NS_RECORD_TYPE:  'custrecord_bm_prop_ns_type',     // TEXT  (invoice / vendorpayment)
+            NS_RECORD_ID:    'custrecord_bm_prop_ns_id',       // INTEGER
+            NS_RECORD_REF:   'custrecord_bm_prop_ns_ref',      // TEXT  (transaction number)
+            MATCH_AMOUNT:    'custrecord_bm_prop_match_amt',   // CURRENCY
+            MATCH_DATE:      'custrecord_bm_prop_match_date',  // DATE   (NS record date)
+            STATUS:          'custrecord_bm_prop_status',      // SELECT → customlist_bm_prop_status
+            APPROVER:        'custrecord_bm_prop_approver',    // SELECT → Employee
+            ADJUST_DATE:     'custrecord_bm_prop_adj_date',    // CHECKBOX
+            NOTES:           'custrecord_bm_prop_notes',       // TEXTAREA
+            APPLIED_DATE:    'custrecord_bm_prop_applied_dt',  // DATE
+            ERROR_MSG:       'custrecord_bm_prop_error_msg',   // TEXTAREA
+            BANK_AMOUNT:     'custrecord_bm_prop_bank_amt',    // CURRENCY
+            BANK_DATE:       'custrecord_bm_prop_bank_date',   // DATE
+            BANK_REF:        'custrecord_bm_prop_bank_ref',    // TEXT
+            BANK_LINE_ID:    'custrecord_bm_prop_bank_line',   // TEXT – native bank line ID
+
+            // ── Idempotency & apply-locking ───────────────────────────────────
+            IDEMPOTENCY_KEY: 'custrecord_bm_idempotency_key',  // TEXT – deduplication key
+            APPLY_STATUS:    'custrecord_bm_apply_status',     // TEXT – Pending|Processing|Applied|Failed
+            APPLY_ATTEMPTS:  'custrecord_bm_apply_attempts',   // INTEGER
+            APPLY_ERROR:     'custrecord_bm_apply_error',      // TEXTAREA – last error detail
+            APPLIED_TXN_ID:  'custrecord_bm_applied_txn_id'   // TEXT – NS internal ID on success
         },
 
         // ── Proposal Status List Values ───────────────────────────────────────
@@ -67,6 +98,14 @@ define([], function () {
             REJECTED: '3',
             APPLIED:  '4',
             FAILED:   '5'
+        },
+
+        // ── Apply Lock Status Values (stored as plain text, not a list) ───────
+        APPLY_STATUS: {
+            PENDING:    'Pending',
+            PROCESSING: 'Processing',
+            APPLIED:    'Applied',
+            FAILED:     'Failed'
         },
 
         // ── Bank Transaction Status List Values ──────────────────────────────
@@ -83,13 +122,21 @@ define([], function () {
             BILL_PAYMENT:     '2'
         },
 
+        // ── Skip Reason Keys (returned in RESTlet skippedReasons map) ─────────
+        SKIP_REASON: {
+            EXISTING_PROPOSAL: 'existing_proposal',
+            NO_CANDIDATE:      'no_candidate_over_threshold',
+            SETTINGS_MISSING:  'settings_missing',
+            CREATION_ERROR:    'creation_error'
+        },
+
         // ── Script / Deployment IDs ──────────────────────────────────────────
         SCRIPTS: {
-            MAIN_SL:        'customscript_bm_main_sl',
-            MAIN_DEPLOY:    'customdeploy_bm_main_sl',
-            SETUP_SL:       'customscript_bm_setup_sl',
-            SETUP_DEPLOY:   'customdeploy_bm_setup_sl',
-            RECONCILE_RL:   'customscript_bm_reconcile_rl',
+            MAIN_SL:          'customscript_bm_main_sl',
+            MAIN_DEPLOY:      'customdeploy_bm_main_sl',
+            SETUP_SL:         'customscript_bm_setup_sl',
+            SETUP_DEPLOY:     'customdeploy_bm_setup_sl',
+            RECONCILE_RL:     'customscript_bm_reconcile_rl',
             RECONCILE_DEPLOY: 'customdeploy_bm_reconcile_rl'
         }
     };

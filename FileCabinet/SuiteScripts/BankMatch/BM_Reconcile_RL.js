@@ -6,19 +6,28 @@
  *
  * Bank Match – RESTlet called by the native Match Bank Data page button.
  *
- * This RESTlet is the bridge between the native NetSuite "Match Bank Data"
- * page and our approval-gated reconciliation engine.  It is invoked via
- * AJAX from the client script we inject into the native banking page.
- *
  * ─── Endpoints ───────────────────────────────────────────────────────────────
- *   GET  action=propose_all  account=<glAccountId>
- *        → Read all unmatched bank lines for the account,
- *          run the scoring engine, create Pending Approval proposals.
- *          Returns { proposed, skipped, pendingCount }
+ *   GET  action=status  [account=<glAccountId>]
+ *        → { ok, pendingCount, appliedToday, settingsOk, canRun, message }
+ *          canRun=false disables the Auto Match button in the client script.
  *
- *   GET  action=status  account=<glAccountId>
- *        → Returns { pendingCount, appliedToday } – used to update
- *          the badge on the injected button.
+ *   GET  action=propose_all  [account=<glAccountId>]  [limit=<n>]  [offset=<n>]
+ *        → Paginated. Processes one page of unmatched bank lines.
+ *          Returns {
+ *            ok, processed, created, skipped,
+ *            skippedReasons: { existing_proposal, no_candidate_over_threshold,
+ *                              settings_missing, creation_error },
+ *            nextOffset, done, pendingCount, message
+ *          }
+ *          Client loops until done=true.
+ *
+ * ─── Idempotency ─────────────────────────────────────────────────────────────
+ * Before creating a proposal, the RESTlet searches for an existing non-rejected
+ * proposal with the same idempotency key. If one exists, the line is skipped
+ * with reason "existing_proposal". Repeated button clicks are safe.
+ *
+ * ─── Governance / batching ───────────────────────────────────────────────────
+ * limit default=100, max=200. Client calls in a loop until done=true.
  */
 define([
     'N/record',
@@ -34,11 +43,12 @@ define([
     var PF = C.PROPOSAL_FIELDS;
     var PS = C.PROPOSAL_STATUS;
     var TT = C.TXN_TYPE;
+    var SR = C.SKIP_REASON;
 
     // ── Load settings ─────────────────────────────────────────────────────
     function _getSettings() {
         var rows = search.create({
-            type: C.RECORDS.SETTINGS,
+            type:    C.RECORDS.SETTINGS,
             filters: [['isinactive', 'is', 'F']],
             columns: Object.values(SF)
         }).run().getRange({ start: 0, end: 1 });
@@ -59,7 +69,7 @@ define([
     function _countPending() {
         var count = 0;
         search.create({
-            type: C.RECORDS.PROPOSAL,
+            type:    C.RECORDS.PROPOSAL,
             filters: [
                 ['isinactive', 'is', 'F'], 'AND',
                 [PF.STATUS, 'anyof', [PS.PENDING]]
@@ -75,40 +85,68 @@ define([
         today.setHours(0, 0, 0, 0);
         var count = 0;
         search.create({
-            type: C.RECORDS.PROPOSAL,
+            type:    C.RECORDS.PROPOSAL,
             filters: [
                 ['isinactive', 'is', 'F'], 'AND',
-                [PF.STATUS, 'anyof', [PS.APPLIED]], 'AND',
-                [PF.APPLIED_DATE, 'onOrAfter', today]
+                [PF.STATUS,        'anyof',    [PS.APPLIED]], 'AND',
+                [PF.APPLIED_DATE,  'onOrAfter', today]
             ],
             columns: ['internalid']
         }).run().each(function () { count++; return count < 500; });
         return count;
     }
 
+    // ── Idempotency key for a bank line ───────────────────────────────────
+    // Primary: native bank line ID.  Fallback: date|amount|normalizedRef.
+    function _idempotencyKey(line) {
+        if (line.id && String(line.id).trim()) {
+            return 'lid:' + String(line.id).trim();
+        }
+        var ref = C.normalizeTxnId(line.reference || '');
+        var amt = parseFloat(line.amount) || 0;
+        return 'fallback:' + (line.date || '') + '|' + amt + '|' + ref;
+    }
+
+    // ── Check for an existing active proposal with this key ───────────────
+    function _proposalExists(key) {
+        if (!key) return false;
+        var found = false;
+        search.create({
+            type:    C.RECORDS.PROPOSAL,
+            filters: [
+                ['isinactive', 'is', 'F'], 'AND',
+                [PF.IDEMPOTENCY_KEY, 'is', key], 'AND',
+                [PF.STATUS, 'noneof', [PS.REJECTED, PS.FAILED]]
+            ],
+            columns: ['internalid']
+        }).run().each(function () { found = true; return false; });
+        return found;
+    }
+
     // ── Create one proposal record ────────────────────────────────────────
-    function _createProposal(line, cand, settings) {
+    function _createProposal(line, cand, settings, idempKey) {
         var isCredit = parseFloat(line.amount) > 0;
         var txnType  = isCredit ? TT.CUSTOMER_PAYMENT : TT.BILL_PAYMENT;
         var nsType   = isCredit ? 'invoice'           : 'vendorpayment';
 
         var propRec = record.create({ type: C.RECORDS.PROPOSAL });
-        propRec.setValue({ fieldId: PF.TXN_TYPE,       value: txnType });
-        propRec.setValue({ fieldId: PF.NS_RECORD_TYPE, value: nsType });
-        propRec.setValue({ fieldId: PF.NS_RECORD_ID,   value: parseInt(cand.nsId, 10) });
-        propRec.setValue({ fieldId: PF.NS_RECORD_REF,  value: cand.reference || '' });
-        propRec.setValue({ fieldId: PF.MATCH_AMOUNT,   value: cand.amount });
-        propRec.setValue({ fieldId: PF.MATCH_DATE,     value: cand.date ? new Date(cand.date) : null });
-        propRec.setValue({ fieldId: PF.STATUS,         value: PS.PENDING });
-        propRec.setValue({ fieldId: PF.ADJUST_DATE,    value: false });
-        propRec.setValue({ fieldId: PF.NOTES,          value: 'Auto-proposed from Match Bank Data (score ' + cand.score + ')' });
-        propRec.setValue({ fieldId: PF.BANK_AMOUNT,    value: line.amount });
-        propRec.setValue({ fieldId: PF.BANK_DATE,      value: line.date ? new Date(line.date) : null });
-        propRec.setValue({ fieldId: PF.BANK_REF,       value: line.reference || '' });
+        propRec.setValue({ fieldId: PF.TXN_TYPE,        value: txnType });
+        propRec.setValue({ fieldId: PF.NS_RECORD_TYPE,  value: nsType });
+        propRec.setValue({ fieldId: PF.NS_RECORD_ID,    value: parseInt(cand.nsId, 10) });
+        propRec.setValue({ fieldId: PF.NS_RECORD_REF,   value: cand.reference || '' });
+        propRec.setValue({ fieldId: PF.MATCH_AMOUNT,    value: cand.amount });
+        propRec.setValue({ fieldId: PF.MATCH_DATE,      value: cand.date ? new Date(cand.date) : null });
+        propRec.setValue({ fieldId: PF.STATUS,          value: PS.PENDING });
+        propRec.setValue({ fieldId: PF.ADJUST_DATE,     value: false });
+        propRec.setValue({ fieldId: PF.NOTES,           value: 'Auto-proposed from Match Bank Data (score ' + cand.score + ')' });
+        propRec.setValue({ fieldId: PF.BANK_AMOUNT,     value: line.amount });
+        propRec.setValue({ fieldId: PF.BANK_DATE,       value: line.date ? new Date(line.date) : null });
+        propRec.setValue({ fieldId: PF.BANK_REF,        value: line.reference || '' });
+        propRec.setValue({ fieldId: PF.IDEMPOTENCY_KEY, value: idempKey || '' });
+        propRec.setValue({ fieldId: PF.APPLY_STATUS,    value: C.APPLY_STATUS.PENDING });
 
-        // Store the native bank line ID for reference
         try { propRec.setValue({ fieldId: PF.BANK_LINE_ID, value: String(line.id) }); }
-        catch (e) { /* field may not exist yet */ }
+        catch (e) { /* field may not exist in older deployments */ }
 
         if (settings && settings.approver) {
             propRec.setValue({ fieldId: PF.APPROVER, value: settings.approver });
@@ -119,62 +157,96 @@ define([
 
     // ── GET handler ───────────────────────────────────────────────────────
     function doGet(params) {
-        var action    = params.action    || 'status';
-        var accountId = params.account   || null;
+        var action    = params.action  || 'status';
+        var accountId = params.account || null;
         var settings  = _getSettings();
 
         // ── status ────────────────────────────────────────────────────────
         if (action === 'status') {
+            var settingsOk = !!settings;
             return JSON.stringify({
-                ok:            true,
-                pendingCount:  _countPending(),
-                appliedToday:  _countAppliedToday(),
-                settingsOk:    !!settings
+                ok:           true,
+                pendingCount: _countPending(),
+                appliedToday: _countAppliedToday(),
+                settingsOk:   settingsOk,
+                canRun:       settingsOk,
+                message:      settingsOk ? '' : 'Bank Match is not configured. Open Settings first.'
             });
         }
 
         // ── propose_all ───────────────────────────────────────────────────
         if (action === 'propose_all') {
             if (!settings) {
-                return JSON.stringify({ ok: false, error: 'Bank Match is not configured. Open Settings first.' });
+                return JSON.stringify({
+                    ok:             false,
+                    error:          'Bank Match is not configured. Open Settings first.',
+                    skippedReasons: { [SR.SETTINGS_MISSING]: 1 }
+                });
             }
+
+            var limit  = Math.min(parseInt(params.limit,  10) || 100, 200);
+            var offset = Math.max(parseInt(params.offset, 10) || 0,   0);
 
             var effectiveAccount = accountId || settings.bankAccount;
             var lineData  = reader.getUnmatchedLines(effectiveAccount);
-            var lines     = lineData.lines;
-            var proposed  = 0;
-            var skipped   = 0;
+            var allLines  = lineData.lines;
+            var total     = allLines.length;
+            var page      = allLines.slice(offset, offset + limit);
 
-            lines.forEach(function (line) {
+            var created       = 0;
+            var skipped       = 0;
+            var skippedReasons = {};
+
+            function _addSkip(reason) {
+                skippedReasons[reason] = (skippedReasons[reason] || 0) + 1;
+                skipped++;
+            }
+
+            page.forEach(function (line) {
+                var key = _idempotencyKey(line);
+
+                // Skip if a non-rejected/non-failed proposal already exists
+                if (_proposalExists(key)) {
+                    _addSkip(SR.EXISTING_PROPOSAL);
+                    return;
+                }
+
                 var isCredit   = parseFloat(line.amount) > 0;
                 var candidates = isCredit
                     ? engine.findInvoiceMatches(line, settings)
                     : engine.findBillPaymentMatches(line, settings);
 
-                // Only propose if best candidate has a meaningful score (≥ 40)
                 if (!candidates.length || candidates[0].score < 40) {
-                    skipped++;
+                    _addSkip(SR.NO_CANDIDATE);
                     return;
                 }
 
                 try {
-                    _createProposal(line, candidates[0], settings);
-                    proposed++;
+                    _createProposal(line, candidates[0], settings, key);
+                    created++;
                 } catch (e) {
                     log.error('BM_Reconcile_RL.propose_all', 'Line ' + line.id + ': ' + e.message);
-                    skipped++;
+                    _addSkip(SR.CREATION_ERROR);
                 }
             });
 
-            log.audit('BM_Reconcile_RL', 'propose_all complete: ' + proposed + ' proposed, ' + skipped + ' skipped');
+            var nextOffset = offset + limit;
+            var done       = nextOffset >= total;
+
+            log.audit('BM_Reconcile_RL',
+                'propose_all offset=' + offset + ' limit=' + limit +
+                ' created=' + created + ' skipped=' + skipped + ' done=' + done);
 
             return JSON.stringify({
-                ok:           true,
-                proposed:     proposed,
-                skipped:      skipped,
-                pendingCount: _countPending(),
-                message:      proposed + ' proposal(s) created and sent for approval. ' +
-                              skipped  + ' line(s) skipped (no confident match).'
+                ok:             true,
+                processed:      page.length,
+                created:        created,
+                skipped:        skipped,
+                skippedReasons: skippedReasons,
+                nextOffset:     done ? null : nextOffset,
+                done:           done,
+                pendingCount:   _countPending(),
+                message:        created + ' proposal(s) created, ' + skipped + ' skipped.'
             });
         }
 
