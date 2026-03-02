@@ -47,13 +47,80 @@ Bank Data page and will auto-match every transaction that Bank Match has approve
 > **Note:** `tranid` (document number) is never written by Bank Match.
 > `custbody_bank_transaction_id` is the sole matching key.
 
-## Quick Start
+## Deployment
 
-1. Deploy: `suitecloud project:deploy`
-2. Open the **BM Setup** suitelet → configure bank account, tolerances, approver
-3. Open **Banking → Match Bank Data** → click **Auto Match**
-4. Open **Pending Approvals** → approve proposals
-5. Click **Run Reconciliation Rules** → **Submit**
+You have three options. Pick one.
+
+---
+
+### Option A — SuiteCloud CLI (recommended)
+
+The project is fully wired for one-command deployment via the
+[SuiteCloud CLI](https://www.npmjs.com/package/@oracle/suitecloud-cli).
+
+**Prerequisites:** Node.js ≥ 18, a NetSuite account with SDF enabled,
+a Token-Based Authentication (TBA) integration set up in NetSuite.
+
+**One-time setup:**
+
+```bash
+npm install                                        # install CLI
+npm run setup                                      # interactive auth wizard
+# ↑ prompts for Account ID, Token ID, Token Secret, Consumer Key/Secret
+# saves credentials under the alias "bank-match-auth"
+```
+
+**Deploy:**
+
+```bash
+npm run deploy       # validate + deploy (prompts for confirmation)
+npm run validate     # dry-run only, no changes pushed
+```
+
+The CLI deploys everything in `manifest.xml` automatically:
+custom body field, custom lists, custom records, all scripts and deployments.
+
+---
+
+### Option B — GitHub Actions (CI/CD, deploy on push)
+
+Push to `main` → auto-deploy. Also supports manual runs targeting sandbox or production.
+
+**Setup:**
+
+1. In GitHub → your repo → **Settings → Secrets and variables → Actions**
+2. Add these 5 secrets:
+
+| Secret name | Where to find it in NetSuite |
+|---|---|
+| `NS_ACCOUNT_ID` | Setup → Company Information |
+| `NS_TOKEN_ID` | Setup → Users/Roles → Access Tokens |
+| `NS_TOKEN_SECRET` | Shown once when token is created |
+| `NS_CONSUMER_KEY` | Setup → Integration → your integration record |
+| `NS_CONSUMER_SECRET` | Shown once when integration is created |
+
+3. Push to `main` — the workflow in `.github/workflows/deploy.yml` runs automatically.
+
+For a manual deploy to sandbox: GitHub → Actions → **Deploy to NetSuite** → **Run workflow** → choose `sandbox`.
+
+---
+
+### Option C — Manual UI
+
+Follow the step-by-step NetSuite UI instructions in:
+- `MANUAL_DEPLOYMENT_GUIDE.md` — initial install
+- `PHASE2_DEPLOYMENT_GUIDE.md` — Phase 2 additions (custom body field, new proposal fields)
+
+No tools or CLI required.
+
+---
+
+**After any deployment method**, configure the Reconciliation Rule (one-time):
+
+1. Banking → Reconciliation Rules → New
+2. Add condition: **Amount** equals Bank Line Amount
+3. Add condition: **Bank Transaction ID** (`custbody_bank_transaction_id`) equals Bank Line Transaction ID
+4. Save and activate
 
 ## CSV Format (for manual bank line import)
 

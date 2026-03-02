@@ -1,0 +1,69 @@
+name: Deploy to NetSuite
+
+# Triggers:
+#   • Push to main      → deploy automatically
+#   • Manual trigger    → choose environment (production or sandbox)
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'sandbox'
+        type: choice
+        options:
+          - sandbox
+          - production
+
+jobs:
+  deploy:
+    name: SuiteCloud Deploy
+    runs-on: ubuntu-latest
+
+    # Use the matching environment so the right secrets are injected
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'production' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Write the SuiteCloud credentials file from repository secrets.
+      # Required secrets (set in GitHub → Settings → Secrets → Actions):
+      #
+      #   NS_ACCOUNT_ID      Your NetSuite Account ID  (e.g. 1234567)
+      #   NS_TOKEN_ID        Token-Based Auth token ID
+      #   NS_TOKEN_SECRET    Token-Based Auth token secret
+      #   NS_CONSUMER_KEY    Integration consumer key
+      #   NS_CONSUMER_SECRET Integration consumer secret
+      #
+      # See: https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/
+      #      section_157771281570.html
+      - name: Write SuiteCloud credentials
+        run: |
+          mkdir -p "$HOME/.suitecloud-sdk/accounts"
+          cat > "$HOME/.suitecloud-sdk/accounts/bank-match-auth.json" <<EOF
+          {
+            "accountId": "${{ secrets.NS_ACCOUNT_ID }}",
+            "tokenId": "${{ secrets.NS_TOKEN_ID }}",
+            "tokenSecret": "${{ secrets.NS_TOKEN_SECRET }}",
+            "consumerKey": "${{ secrets.NS_CONSUMER_KEY }}",
+            "consumerSecret": "${{ secrets.NS_CONSUMER_SECRET }}"
+          }
+          EOF
+
+      - name: Validate project
+        run: npm run validate
+
+      - name: Deploy to NetSuite
+        run: npm run deploy:no-prompt
