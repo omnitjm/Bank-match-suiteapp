@@ -4,12 +4,15 @@
  * @NModuleScope SameAccount
  * @NScriptType Restlet
  *
- * Bank Match – RESTlet called by the native Match Bank Data page button.
+ * Bank Match – RESTlet (kept for backward compatibility and API access).
+ *
+ * Primary auto-match triggering is now done server-side in BM_Main_SL.js
+ * via the "Run Auto-Match" button. This RESTlet provides the same capability
+ * via HTTP GET for programmatic / external integrations.
  *
  * ─── Endpoints ───────────────────────────────────────────────────────────────
  *   GET  action=status  [account=<glAccountId>]
  *        → { ok, pendingCount, appliedToday, settingsOk, canRun, message }
- *          canRun=false disables the Auto Match button in the client script.
  *
  *   GET  action=propose_all  [account=<glAccountId>]  [limit=<n>]  [offset=<n>]
  *        → Paginated. Processes one page of unmatched bank lines.
@@ -19,15 +22,13 @@
  *                              settings_missing, creation_error },
  *            nextOffset, done, pendingCount, message
  *          }
- *          Client loops until done=true.
  *
  * ─── Idempotency ─────────────────────────────────────────────────────────────
- * Before creating a proposal, the RESTlet searches for an existing non-rejected
- * proposal with the same idempotency key. If one exists, the line is skipped
- * with reason "existing_proposal". Repeated button clicks are safe.
+ * Before creating a proposal, searches for an existing non-rejected proposal
+ * with the same idempotency key. Repeated calls are safe.
  *
  * ─── Governance / batching ───────────────────────────────────────────────────
- * limit default=100, max=200. Client calls in a loop until done=true.
+ * limit default=100, max=200. Caller loops until done=true.
  */
 define([
     'N/record',
@@ -88,16 +89,15 @@ define([
             type:    C.RECORDS.PROPOSAL,
             filters: [
                 ['isinactive', 'is', 'F'], 'AND',
-                [PF.STATUS,        'anyof',    [PS.APPLIED]], 'AND',
-                [PF.APPLIED_DATE,  'onOrAfter', today]
+                [PF.STATUS,       'anyof',    [PS.APPLIED]], 'AND',
+                [PF.APPLIED_DATE, 'onOrAfter', today]
             ],
             columns: ['internalid']
         }).run().each(function () { count++; return count < 500; });
         return count;
     }
 
-    // ── Idempotency key for a bank line ───────────────────────────────────
-    // Primary: native bank line ID.  Fallback: date|amount|normalizedRef.
+    // ── Idempotency key ───────────────────────────────────────────────────
     function _idempotencyKey(line) {
         if (line.id && String(line.id).trim()) {
             return 'lid:' + String(line.id).trim();
@@ -107,7 +107,7 @@ define([
         return 'fallback:' + (line.date || '') + '|' + amt + '|' + ref;
     }
 
-    // ── Check for an existing active proposal with this key ───────────────
+    // ── Check for existing active proposal ────────────────────────────────
     function _proposalExists(key) {
         if (!key) return false;
         var found = false;
@@ -126,8 +126,8 @@ define([
     // ── Create one proposal record ────────────────────────────────────────
     function _createProposal(line, cand, settings, idempKey) {
         var isCredit = parseFloat(line.amount) > 0;
-        var txnType  = isCredit ? TT.CUSTOMER_PAYMENT : TT.BILL_PAYMENT;
-        var nsType   = isCredit ? 'invoice'           : 'vendorpayment';
+        var txnType  = isCredit ? TT.CUSTOMER_PAYMENT : TT.VENDOR_PAYMENT;
+        var nsType   = isCredit ? 'invoice'           : 'vendorbill';
 
         var propRec = record.create({ type: C.RECORDS.PROPOSAL });
         propRec.setValue({ fieldId: PF.TXN_TYPE,        value: txnType });
@@ -137,16 +137,17 @@ define([
         propRec.setValue({ fieldId: PF.MATCH_AMOUNT,    value: cand.amount });
         propRec.setValue({ fieldId: PF.MATCH_DATE,      value: cand.date ? new Date(cand.date) : null });
         propRec.setValue({ fieldId: PF.STATUS,          value: PS.PENDING });
-        propRec.setValue({ fieldId: PF.ADJUST_DATE,     value: false });
-        propRec.setValue({ fieldId: PF.NOTES,           value: 'Auto-proposed from Match Bank Data (score ' + cand.score + ')' });
+        propRec.setValue({ fieldId: PF.NOTES,
+            value: 'Auto-proposed (score ' + cand.score + ')' });
         propRec.setValue({ fieldId: PF.BANK_AMOUNT,     value: line.amount });
         propRec.setValue({ fieldId: PF.BANK_DATE,       value: line.date ? new Date(line.date) : null });
         propRec.setValue({ fieldId: PF.BANK_REF,        value: line.reference || '' });
         propRec.setValue({ fieldId: PF.IDEMPOTENCY_KEY, value: idempKey || '' });
         propRec.setValue({ fieldId: PF.APPLY_STATUS,    value: C.APPLY_STATUS.PENDING });
 
-        try { propRec.setValue({ fieldId: PF.BANK_LINE_ID, value: String(line.id) }); }
-        catch (e) { /* field may not exist in older deployments */ }
+        try {
+            propRec.setValue({ fieldId: PF.BANK_LINE_ID, value: String(line.id) });
+        } catch (e) { /* optional field */ }
 
         if (settings && settings.approver) {
             propRec.setValue({ fieldId: PF.APPROVER, value: settings.approver });
@@ -170,7 +171,8 @@ define([
                 appliedToday: _countAppliedToday(),
                 settingsOk:   settingsOk,
                 canRun:       settingsOk,
-                message:      settingsOk ? '' : 'Bank Match is not configured. Open Settings first.'
+                message:      settingsOk ? '' :
+                    'Bank Match is not configured. Open Settings first.'
             });
         }
 
@@ -193,8 +195,8 @@ define([
             var total     = allLines.length;
             var page      = allLines.slice(offset, offset + limit);
 
-            var created       = 0;
-            var skipped       = 0;
+            var created        = 0;
+            var skipped        = 0;
             var skippedReasons = {};
 
             function _addSkip(reason) {
@@ -205,7 +207,6 @@ define([
             page.forEach(function (line) {
                 var key = _idempotencyKey(line);
 
-                // Skip if a non-rejected/non-failed proposal already exists
                 if (_proposalExists(key)) {
                     _addSkip(SR.EXISTING_PROPOSAL);
                     return;
@@ -214,7 +215,7 @@ define([
                 var isCredit   = parseFloat(line.amount) > 0;
                 var candidates = isCredit
                     ? engine.findInvoiceMatches(line, settings)
-                    : engine.findBillPaymentMatches(line, settings);
+                    : engine.findVendorBillMatches(line, settings);
 
                 if (!candidates.length || candidates[0].score < 40) {
                     _addSkip(SR.NO_CANDIDATE);
@@ -225,7 +226,8 @@ define([
                     _createProposal(line, candidates[0], settings, key);
                     created++;
                 } catch (e) {
-                    log.error('BM_Reconcile_RL.propose_all', 'Line ' + line.id + ': ' + e.message);
+                    log.error('BM_Reconcile_RL.propose_all',
+                        'Line ' + line.id + ': ' + e.message);
                     _addSkip(SR.CREATION_ERROR);
                 }
             });

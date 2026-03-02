@@ -11,7 +11,10 @@
  *
  *   1. Early-exit if apply_status is already Processing or Applied.
  *   2. Set apply_status = Processing, increment apply_attempts.
- *   3. Execute matching engine (applyCustomerPayment / applyBillPayment).
+ *   3. Execute engine based on txn_type:
+ *        '1' CUSTOMER_PAYMENT → applyCustomerPayment (Invoice → Customer Payment)
+ *        '2' VENDOR_PAYMENT   → applyVendorPayment   (Vendor Bill → Vendor Payment)
+ *        '3' JOURNAL_ENTRY    → applyJournalEntry    (GL Account → Journal Entry)
  *   4. Set custbody_bank_transaction_id on the resulting NS transaction.
  *      Value is normalizeTxnId(bankRef) — trimmed, uppercased.
  *   5. Mark proposal Applied (or Failed) and record the NS txn ID.
@@ -19,8 +22,8 @@
  * IMPORTANT:
  *   tranid is NEVER written here.
  *   custbody_bank_transaction_id is the sole field used for bank matching.
- *   After proposals are applied, the user runs "Run Reconciliation Rules"
- *   then "Submit" on the native Match Bank Data page — no manual re-matching.
+ *   After proposals are applied, NetSuite's native Reconciliation Rules
+ *   automatically reconcile transactions stamped with this field.
  */
 define([
     'N/record',
@@ -36,6 +39,20 @@ define([
     var AS = C.APPLY_STATUS;
     var TS = C.TXN_STATUS;
     var BF = C.BODY_FIELD;
+
+    // ── Load settings (needed for Journal Entry to get bank GL account) ────
+    function _getSettings() {
+        var SF = C.SETTINGS_FIELDS;
+        var rows = search.create({
+            type:    C.RECORDS.SETTINGS,
+            filters: [['isinactive', 'is', 'F']],
+            columns: [SF.BANK_ACCOUNT]
+        }).run().getRange({ start: 0, end: 1 });
+
+        if (!rows || !rows.length) return null;
+        var r = rows[0];
+        return { bankAccount: r.getValue(SF.BANK_ACCOUNT) };
+    }
 
     // ── beforeLoad ────────────────────────────────────────────────────────
     function beforeLoad(context) {
@@ -54,8 +71,7 @@ define([
         // Only proceed when status just became APPROVED
         if (newStatus !== PS.APPROVED) return;
 
-        // Prevents re-entry when our own submitFields calls fire the UE again
-        // (those calls change apply_status / proposal_status, not back to APPROVED)
+        // Prevent re-entry: if old status was already Approved or Applied, skip
         if (context.oldRecord) {
             var oldStatus = context.oldRecord.getValue(PF.STATUS);
             if (oldStatus === PS.APPROVED || oldStatus === PS.APPLIED) return;
@@ -65,13 +81,12 @@ define([
         log.audit('BM_Proposal_UE', 'Proposal ' + proposalId + ' approved – starting apply');
 
         // ── Concurrency lock ──────────────────────────────────────────────
-        // Load a fresh copy to check apply_status at the moment we act.
-        // Guards against two simultaneous approval actions on the same proposal.
         var freshRec;
         try {
             freshRec = record.load({ type: C.RECORDS.PROPOSAL, id: proposalId });
         } catch (loadErr) {
-            log.error('BM_Proposal_UE', 'Could not load proposal for lock check: ' + loadErr.message);
+            log.error('BM_Proposal_UE',
+                'Could not load proposal for lock check: ' + loadErr.message);
             return;
         }
 
@@ -106,8 +121,6 @@ define([
             bankAmount:  newRec.getValue(PF.BANK_AMOUNT),
             bankDate:    newRec.getValue(PF.BANK_DATE),
             bankRef:     newRec.getValue(PF.BANK_REF),
-            adjustDate:  newRec.getValue(PF.ADJUST_DATE) === true ||
-                         newRec.getValue(PF.ADJUST_DATE) === 'T',
             bankTxnId:   newRec.getValue(PF.BANK_TXN)
         };
 
@@ -120,10 +133,10 @@ define([
         try {
             if (String(proposal.txnType) === String(C.TXN_TYPE.CUSTOMER_PAYMENT)) {
 
-                // Creates a new Customer Payment and applies it to the invoice
+                // Create Customer Payment applied to the Invoice
                 appliedId = engine.applyCustomerPayment(proposal);
 
-                // Stamp custbody_bank_transaction_id so Reconciliation Rules can match
+                // Stamp custbody_bank_transaction_id
                 if (normRef && appliedId) {
                     record.submitFields({
                         type:    record.Type.CUSTOMER_PAYMENT,
@@ -133,16 +146,39 @@ define([
                     });
                 }
 
-            } else if (String(proposal.txnType) === String(C.TXN_TYPE.BILL_PAYMENT)) {
+            } else if (String(proposal.txnType) === String(C.TXN_TYPE.VENDOR_PAYMENT)) {
 
-                // Optionally adjusts the Vendor Payment date
-                engine.applyBillPayment(proposal);
-                appliedId = String(proposal.nsId);
+                // Create Vendor Payment applied to the Vendor Bill
+                appliedId = engine.applyVendorPayment(proposal);
 
-                // Stamp custbody_bank_transaction_id on the existing Vendor Payment
+                // Stamp custbody_bank_transaction_id
                 if (normRef && appliedId) {
                     record.submitFields({
-                        type:    'vendorpayment',
+                        type:    record.Type.VENDOR_PAYMENT,
+                        id:      appliedId,
+                        values:  { [BF.BANK_TXN_ID]: normRef },
+                        options: { enableSourcing: false, ignoreMandatoryFields: true }
+                    });
+                }
+
+            } else if (String(proposal.txnType) === String(C.TXN_TYPE.JOURNAL_ENTRY)) {
+
+                // Load settings to get the bank GL account
+                var settings = _getSettings();
+                if (!settings || !settings.bankAccount) {
+                    throw new Error(
+                        'Bank GL account not configured in Bank Match Settings ' +
+                        '— cannot create Journal Entry'
+                    );
+                }
+
+                // Create Journal Entry
+                appliedId = engine.applyJournalEntry(proposal, settings.bankAccount);
+
+                // Stamp custbody_bank_transaction_id
+                if (normRef && appliedId) {
+                    record.submitFields({
+                        type:    record.Type.JOURNAL_ENTRY,
                         id:      appliedId,
                         values:  { [BF.BANK_TXN_ID]: normRef },
                         options: { enableSourcing: false, ignoreMandatoryFields: true }
@@ -181,7 +217,7 @@ define([
             options: { ignoreMandatoryFields: true }
         });
 
-        // ── Update bank transaction status ────────────────────────────────
+        // ── Update bank transaction status (if linked to a custom record) ──
         if (!errorMsg && proposal.bankTxnId) {
             try {
                 var txnUpdate = {};
@@ -193,12 +229,14 @@ define([
                     options: { ignoreMandatoryFields: true }
                 });
             } catch (e2) {
-                log.error('BM_Proposal_UE', 'Could not update bank txn status: ' + e2.message);
+                log.error('BM_Proposal_UE',
+                    'Could not update bank txn status: ' + e2.message);
             }
         }
 
         log.audit('BM_Proposal_UE',
-            'Proposal ' + proposalId + ' result: ' + (errorMsg ? 'FAILED' : 'APPLIED') +
+            'Proposal ' + proposalId + ' result: ' +
+            (errorMsg ? 'FAILED' : 'APPLIED') +
             (appliedId ? ' (NS ID ' + appliedId + ')' : ''));
     }
 

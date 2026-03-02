@@ -7,10 +7,14 @@
     </custvalue>
     <custvalue scriptid="customvalue_bm_txn_type_2">
       <isinactive>F</isinactive>
-      <value>Bill Payment</value>
+      <value>Vendor Payment</value>
+    </custvalue>
+    <custvalue scriptid="customvalue_bm_txn_type_3">
+      <isinactive>F</isinactive>
+      <value>Journal Entry</value>
     </custvalue>
   </custvalues>
-  <description>Transaction type for Bank Match proposals (Customer Payment or Bill Payment)</description>
+  <description>Transaction type for Bank Match proposals (Customer Payment, Vendor Payment, or Journal Entry)</description>
   <isordered>F</isordered>
   <name>BM Transaction Type</name>
 </customlist>

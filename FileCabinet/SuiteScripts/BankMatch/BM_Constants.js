@@ -67,14 +67,14 @@ define([], function () {
         PROPOSAL_FIELDS: {
             BANK_TXN:        'custrecord_bm_prop_bank_txn',    // SELECT → customrecord_bm_bank_txn
             TXN_TYPE:        'custrecord_bm_prop_txn_type',    // SELECT → customlist_bm_txn_type
-            NS_RECORD_TYPE:  'custrecord_bm_prop_ns_type',     // TEXT  (invoice / vendorpayment)
+            NS_RECORD_TYPE:  'custrecord_bm_prop_ns_type',     // TEXT  (invoice / vendorbill / account)
             NS_RECORD_ID:    'custrecord_bm_prop_ns_id',       // INTEGER
             NS_RECORD_REF:   'custrecord_bm_prop_ns_ref',      // TEXT  (transaction number)
             MATCH_AMOUNT:    'custrecord_bm_prop_match_amt',   // CURRENCY
             MATCH_DATE:      'custrecord_bm_prop_match_date',  // DATE   (NS record date)
             STATUS:          'custrecord_bm_prop_status',      // SELECT → customlist_bm_prop_status
             APPROVER:        'custrecord_bm_prop_approver',    // SELECT → Employee
-            ADJUST_DATE:     'custrecord_bm_prop_adj_date',    // CHECKBOX
+            ADJUST_DATE:     'custrecord_bm_prop_adj_date',    // CHECKBOX (legacy, unused)
             NOTES:           'custrecord_bm_prop_notes',       // TEXTAREA
             APPLIED_DATE:    'custrecord_bm_prop_applied_dt',  // DATE
             ERROR_MSG:       'custrecord_bm_prop_error_msg',   // TEXTAREA
@@ -117,9 +117,13 @@ define([], function () {
         },
 
         // ── Transaction Type List Values ─────────────────────────────────────
+        // '1' Customer Payment — create Customer Payment applied to Invoice
+        // '2' Vendor Payment   — create Vendor Payment applied to Vendor Bill
+        // '3' Journal Entry    — create Journal Entry against a GL account
         TXN_TYPE: {
             CUSTOMER_PAYMENT: '1',
-            BILL_PAYMENT:     '2'
+            VENDOR_PAYMENT:   '2',
+            JOURNAL_ENTRY:    '3'
         },
 
         // ── Skip Reason Keys (returned in RESTlet skippedReasons map) ─────────

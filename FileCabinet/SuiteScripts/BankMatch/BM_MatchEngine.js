@@ -3,13 +3,19 @@
  * @NApiVersion 2.1
  * @NModuleScope SameAccount
  *
- * Core matching and reconciliation engine.
+ * Core matching and transaction-creation engine for Bank Match Central.
  *
  * Responsibilities:
- *   1. findInvoiceMatches  – search open Sales Invoices that match a bank credit.
- *   2. findBillPaymentMatches – search posted Vendor Payments that match a bank debit.
- *   3. applyCustomerPayment – create/apply a Customer Payment record to an invoice.
- *   4. applyBillPayment     – optionally adjust the Vendor Payment date to the bank date.
+ *   1. findInvoiceMatches      – open Sales Invoices matching a bank credit.
+ *   2. findVendorBillMatches   – open Vendor Bills matching a bank debit.
+ *   3. findOpenInvoicesByCustomer – all open invoices for a given customer.
+ *   4. findOpenBillsByVendor      – all open bills for a given vendor.
+ *   5. applyCustomerPayment    – create Customer Payment applied to an Invoice.
+ *   6. applyVendorPayment      – create Vendor Payment applied to a Vendor Bill.
+ *   7. applyJournalEntry       – create Journal Entry against a GL Account.
+ *
+ * ALL three apply functions stamp custbody_bank_transaction_id on the
+ * resulting NetSuite transaction.  NEVER write to tranid.
  */
 define([
     'N/search',
@@ -29,7 +35,7 @@ define([
      */
     function _score(bankTxn, candidate, toleranceAmt, toleranceDays) {
         var score = 0;
-        var bankAmt  = Math.abs(parseFloat(bankTxn.amount)  || 0);
+        var bankAmt  = Math.abs(parseFloat(bankTxn.amount)   || 0);
         var candAmt  = Math.abs(parseFloat(candidate.amount) || 0);
         var amtDiff  = Math.abs(bankAmt - candAmt);
 
@@ -41,13 +47,13 @@ define([
 
         // Date proximity (30 pts)
         if (bankTxn.date && candidate.date) {
-            var d1 = new Date(bankTxn.date);
-            var d2 = new Date(candidate.date);
+            var d1   = new Date(bankTxn.date);
+            var d2   = new Date(candidate.date);
             var days = Math.abs((d1 - d2) / 86400000);
-            if (days === 0)                          score += 30;
-            else if (days <= 3)                      score += 22;
-            else if (days <= 7)                      score += 14;
-            else if (days <= toleranceDays)          score += 6;
+            if (days === 0)                         score += 30;
+            else if (days <= 3)                     score += 22;
+            else if (days <= 7)                     score += 14;
+            else if (days <= toleranceDays)         score += 6;
         }
 
         // Reference (30 pts)
@@ -55,9 +61,9 @@ define([
             var bRef = String(bankTxn.reference).toLowerCase().replace(/\W/g, '');
             var cRef = String(candidate.reference).toLowerCase().replace(/\W/g, '');
             if (bRef && cRef) {
-                if (bRef === cRef)                   score += 30;
+                if (bRef === cRef)                  score += 30;
                 else if (bRef.indexOf(cRef) >= 0 ||
-                         cRef.indexOf(bRef) >= 0)    score += 18;
+                         cRef.indexOf(bRef) >= 0)   score += 18;
             }
         }
 
@@ -70,21 +76,21 @@ define([
         return isNaN(d.getTime()) ? null : d;
     }
 
-    // ── Public API ────────────────────────────────────────────────────────────
+    // ── Public API — Matching ─────────────────────────────────────────────────
 
     /**
      * Find open Sales Invoices whose remaining amount is within tolerance
      * of the bank credit amount.
      *
-     * @param {Object} bankTxn   { date, amount, reference, currency }
+     * @param {Object} bankTxn   { date, amount, reference }
      * @param {Object} settings  { toleranceAmt, toleranceDays, subsidiary }
-     * @returns {Array}  sorted array of candidates (best match first)
+     * @returns {Array}  sorted candidates, best match first
      */
     function findInvoiceMatches(bankTxn, settings) {
-        var amt      = Math.abs(parseFloat(bankTxn.amount) || 0);
-        var tolAmt   = parseFloat(settings.toleranceAmt)  || 0;
-        var tolDays  = parseInt(settings.toleranceDays, 10) || 30;
-        var results  = [];
+        var amt     = Math.abs(parseFloat(bankTxn.amount) || 0);
+        var tolAmt  = parseFloat(settings.toleranceAmt)   || 0;
+        var tolDays = parseInt(settings.toleranceDays, 10) || 30;
+        var results = [];
 
         var filters = [
             ['type', 'anyof', 'CustInvc'], 'AND',
@@ -107,15 +113,15 @@ define([
             search.create({ type: 'transaction', filters: filters, columns: columns })
                 .run().each(function (row) {
                     var candidate = {
-                        type:       C.TXN_TYPE.CUSTOMER_PAYMENT,
-                        nsType:     'invoice',
-                        nsId:       row.getValue('internalid'),
-                        reference:  row.getValue('tranid'),
-                        date:       row.getValue('trandate'),
-                        amount:     parseFloat(row.getValue('amountremaining')),
-                        currency:   row.getValue('currency'),
-                        entity:     row.getValue({ name: 'companyname', join: 'customer' }) ||
-                                    row.getValue({ name: 'entityid',   join: 'customer' })
+                        type:      C.TXN_TYPE.CUSTOMER_PAYMENT,
+                        nsType:    'invoice',
+                        nsId:      row.getValue('internalid'),
+                        reference: row.getValue('tranid'),
+                        date:      row.getValue('trandate'),
+                        amount:    parseFloat(row.getValue('amountremaining')),
+                        currency:  row.getValue('currency'),
+                        entity:    row.getValue({ name: 'companyname', join: 'customer' }) ||
+                                   row.getValue({ name: 'entityid',   join: 'customer' })
                     };
                     candidate.score = _score(bankTxn, candidate, tolAmt, tolDays);
                     results.push(candidate);
@@ -129,23 +135,23 @@ define([
     }
 
     /**
-     * Find posted Vendor Payments whose amount is within tolerance of the
-     * bank debit amount.
+     * Find open Vendor Bills whose remaining amount is within tolerance
+     * of the bank debit amount.
      *
-     * @param {Object} bankTxn   { date, amount, reference, currency }
+     * @param {Object} bankTxn   { date, amount, reference }
      * @param {Object} settings  { toleranceAmt, toleranceDays, subsidiary }
-     * @returns {Array}  sorted array of candidates
+     * @returns {Array}  sorted candidates, best match first
      */
-    function findBillPaymentMatches(bankTxn, settings) {
+    function findVendorBillMatches(bankTxn, settings) {
         var amt     = Math.abs(parseFloat(bankTxn.amount) || 0);
-        var tolAmt  = parseFloat(settings.toleranceAmt)  || 0;
+        var tolAmt  = parseFloat(settings.toleranceAmt)   || 0;
         var tolDays = parseInt(settings.toleranceDays, 10) || 30;
         var results = [];
 
         var filters = [
-            ['type', 'anyof', 'VendPymt'], 'AND',
-            ['amount', 'between', Math.max(0, amt - tolAmt), amt + tolAmt], 'AND',
-            ['mainline', 'is', 'T']
+            ['type', 'anyof', 'VendBill'], 'AND',
+            ['status', 'anyof', 'VendBill:Open'], 'AND',
+            ['amountremaining', 'between', Math.max(0, amt - tolAmt), amt + tolAmt]
         ];
         if (settings.subsidiary) {
             filters.push('AND');
@@ -153,7 +159,8 @@ define([
         }
 
         var columns = [
-            'internalid', 'tranid', 'trandate', 'amount', 'currency',
+            'internalid', 'tranid', 'trandate',
+            'amountremaining', 'currency',
             search.createColumn({ name: 'companyname', join: 'vendor' }),
             search.createColumn({ name: 'entityid',   join: 'vendor' })
         ];
@@ -162,12 +169,12 @@ define([
             search.create({ type: 'transaction', filters: filters, columns: columns })
                 .run().each(function (row) {
                     var candidate = {
-                        type:      C.TXN_TYPE.BILL_PAYMENT,
-                        nsType:    'vendorpayment',
+                        type:      C.TXN_TYPE.VENDOR_PAYMENT,
+                        nsType:    'vendorbill',
                         nsId:      row.getValue('internalid'),
                         reference: row.getValue('tranid'),
                         date:      row.getValue('trandate'),
-                        amount:    parseFloat(row.getValue('amount')),
+                        amount:    parseFloat(row.getValue('amountremaining')),
                         currency:  row.getValue('currency'),
                         entity:    row.getValue({ name: 'companyname', join: 'vendor' }) ||
                                    row.getValue({ name: 'entityid',   join: 'vendor' })
@@ -177,94 +184,17 @@ define([
                     return true;
                 });
         } catch (e) {
-            log.error('BM_MatchEngine.findBillPaymentMatches', e.message);
+            log.error('BM_MatchEngine.findVendorBillMatches', e.message);
         }
 
         return results.sort(function (a, b) { return b.score - a.score; });
     }
 
     /**
-     * Apply an approved Customer Payment proposal.
-     * Creates a Customer Payment record and applies it to the matched invoice.
-     *
-     * @param {Object} proposal  All proposal field values
-     * @returns {string}  Internal ID of the new Customer Payment record
-     */
-    function applyCustomerPayment(proposal) {
-        var invoiceId  = proposal.nsId;
-        var bankAmt    = parseFloat(proposal.bankAmount);
-        var bankDate   = _parseDate(proposal.bankDate) || new Date();
-
-        // Load invoice to get customer + currency
-        var invRec     = record.load({ type: record.Type.INVOICE, id: invoiceId });
-        var customerId = invRec.getValue('entity');
-        var currency   = invRec.getValue('currency');
-
-        // Create Customer Payment in dynamic mode so the Apply sublist populates
-        var payment = record.create({ type: record.Type.CUSTOMER_PAYMENT, isDynamic: true });
-        payment.setValue({ fieldId: 'customer',  value: customerId });
-        payment.setValue({ fieldId: 'trandate',  value: bankDate });
-        payment.setValue({ fieldId: 'payment',   value: bankAmt });
-        payment.setValue({ fieldId: 'currency',  value: currency });
-        payment.setValue({ fieldId: 'memo',
-            value: 'Bank Match reconciliation – bank ref: ' + (proposal.bankRef || '') });
-
-        // Find and check the invoice line in the Apply sublist
-        var lineCount = payment.getLineCount({ sublistId: 'apply' });
-        for (var i = 0; i < lineCount; i++) {
-            var lineId = payment.getSublistValue({ sublistId: 'apply', fieldId: 'internalid', line: i });
-            if (String(lineId) === String(invoiceId)) {
-                payment.selectLine({ sublistId: 'apply', line: i });
-                payment.setCurrentSublistValue({ sublistId: 'apply', fieldId: 'apply',  value: true });
-                payment.setCurrentSublistValue({ sublistId: 'apply', fieldId: 'amount', value: bankAmt });
-                payment.commitLine({ sublistId: 'apply' });
-                break;
-            }
-        }
-
-        var newId = payment.save({ enableSourcing: true, ignoreMandatoryFields: false });
-        log.audit('BM_MatchEngine', 'Customer Payment ' + newId +
-                  ' created and applied to Invoice ' + invoiceId);
-        return String(newId);
-    }
-
-    /**
-     * Reconcile an approved Bill Payment proposal.
-     * If "Adjust Date" is checked, updates the Vendor Payment's trandate
-     * to match the bank statement date.
-     *
-     * @param {Object} proposal  All proposal field values
-     * @returns {boolean}
-     */
-    function applyBillPayment(proposal) {
-        var vendorPaymentId = proposal.nsId;
-
-        if (proposal.adjustDate) {
-            var bankDate = _parseDate(proposal.bankDate) || new Date();
-            record.submitFields({
-                type: 'vendorpayment',
-                id:   vendorPaymentId,
-                values: {
-                    trandate: bankDate,
-                    memo: 'Date adjusted via Bank Match – bank ref: ' + (proposal.bankRef || '')
-                },
-                options: { enableSourcing: true, ignoreMandatoryFields: false }
-            });
-            log.audit('BM_MatchEngine',
-                'Vendor Payment ' + vendorPaymentId + ' date adjusted to ' + proposal.bankDate);
-        } else {
-            log.audit('BM_MatchEngine',
-                'Vendor Payment ' + vendorPaymentId + ' reconciled (no date adjustment)');
-        }
-        return true;
-    }
-
-    /**
      * Find all open Sales Invoices for a specific customer.
-     * Used when the user explicitly selects a customer on the match page.
      *
-     * @param {string|number} customerId  NetSuite internal ID of the customer
-     * @returns {Array}  Open invoices sorted by due date ascending (oldest first)
+     * @param {string|number} customerId
+     * @returns {Array}  sorted by due date ascending (oldest first)
      */
     function findOpenInvoicesByCustomer(customerId) {
         var results = [];
@@ -297,7 +227,6 @@ define([
         } catch (e) {
             log.error('BM_MatchEngine.findOpenInvoicesByCustomer', e.message);
         }
-        // Oldest due date first so most-overdue invoices appear at the top
         return results.sort(function (a, b) {
             var da = a.dueDate ? new Date(a.dueDate) : new Date(a.date);
             var db = b.dueDate ? new Date(b.dueDate) : new Date(b.date);
@@ -306,52 +235,225 @@ define([
     }
 
     /**
-     * Find posted Vendor Payments for a specific vendor.
-     * Used for matching bank debits when the user explicitly selects a vendor.
+     * Find all open Vendor Bills for a specific vendor.
      *
-     * @param {string|number} vendorId  NetSuite internal ID of the vendor
-     * @returns {Array}  Vendor payments sorted by date descending (most recent first)
+     * @param {string|number} vendorId
+     * @returns {Array}  sorted by due date ascending (oldest first)
      */
-    function findVendorPaymentsByVendor(vendorId) {
+    function findOpenBillsByVendor(vendorId) {
         var results = [];
         try {
             search.create({
                 type: 'transaction',
                 filters: [
-                    ['type',     'anyof', 'VendPymt'], 'AND',
-                    ['entity',   'anyof', String(vendorId)], 'AND',
-                    ['mainline', 'is',    'T']
+                    ['type',   'anyof', 'VendBill'],      'AND',
+                    ['status', 'anyof', 'VendBill:Open'], 'AND',
+                    ['entity', 'anyof', String(vendorId)]
                 ],
                 columns: [
-                    'internalid', 'tranid', 'trandate',
-                    'amount', 'currency', 'memo'
+                    'internalid', 'tranid', 'trandate', 'duedate',
+                    'amountremaining', 'amount', 'currency', 'memo'
                 ]
             }).run().each(function (row) {
                 results.push({
-                    nsId:      row.getValue('internalid'),
-                    nsType:    'vendorpayment',
-                    reference: row.getValue('tranid'),
-                    date:      row.getValue('trandate'),
-                    amount:    parseFloat(row.getValue('amount')) || 0,
-                    currency:  row.getValue('currency'),
-                    memo:      row.getValue('memo')
+                    nsId:       row.getValue('internalid'),
+                    nsType:     'vendorbill',
+                    reference:  row.getValue('tranid'),
+                    date:       row.getValue('trandate'),
+                    dueDate:    row.getValue('duedate'),
+                    amount:     parseFloat(row.getValue('amountremaining')) || 0,
+                    origAmount: parseFloat(row.getValue('amount'))          || 0,
+                    currency:   row.getValue('currency'),
+                    memo:       row.getValue('memo')
                 });
                 return results.length < 200;
             });
         } catch (e) {
-            log.error('BM_MatchEngine.findVendorPaymentsByVendor', e.message);
+            log.error('BM_MatchEngine.findOpenBillsByVendor', e.message);
         }
         return results.sort(function (a, b) {
-            return new Date(b.date) - new Date(a.date);
+            var da = a.dueDate ? new Date(a.dueDate) : new Date(a.date);
+            var db = b.dueDate ? new Date(b.dueDate) : new Date(b.date);
+            return da - db;
         });
+    }
+
+    // ── Public API — Transaction Creation ─────────────────────────────────────
+
+    /**
+     * Create a Customer Payment and apply it to the matched Invoice.
+     * Caller must stamp custbody_bank_transaction_id on the returned ID.
+     *
+     * @param {Object} proposal  { nsId: invoiceId, bankAmount, bankDate, bankRef }
+     * @returns {string}  Internal ID of the new Customer Payment
+     */
+    function applyCustomerPayment(proposal) {
+        var invoiceId  = proposal.nsId;
+        var bankAmt    = parseFloat(proposal.bankAmount);
+        var bankDate   = _parseDate(proposal.bankDate) || new Date();
+
+        var invRec     = record.load({ type: record.Type.INVOICE, id: invoiceId });
+        var customerId = invRec.getValue('entity');
+        var currency   = invRec.getValue('currency');
+
+        var payment = record.create({ type: record.Type.CUSTOMER_PAYMENT, isDynamic: true });
+        payment.setValue({ fieldId: 'customer', value: customerId });
+        payment.setValue({ fieldId: 'trandate', value: bankDate });
+        payment.setValue({ fieldId: 'payment',  value: bankAmt });
+        payment.setValue({ fieldId: 'currency', value: currency });
+        payment.setValue({ fieldId: 'memo',
+            value: 'Bank Match – bank ref: ' + (proposal.bankRef || '') });
+
+        var lineCount = payment.getLineCount({ sublistId: 'apply' });
+        for (var i = 0; i < lineCount; i++) {
+            var lineId = payment.getSublistValue({
+                sublistId: 'apply', fieldId: 'internalid', line: i
+            });
+            if (String(lineId) === String(invoiceId)) {
+                payment.selectLine({ sublistId: 'apply', line: i });
+                payment.setCurrentSublistValue({
+                    sublistId: 'apply', fieldId: 'apply',  value: true
+                });
+                payment.setCurrentSublistValue({
+                    sublistId: 'apply', fieldId: 'amount', value: bankAmt
+                });
+                payment.commitLine({ sublistId: 'apply' });
+                break;
+            }
+        }
+
+        var newId = payment.save({ enableSourcing: true, ignoreMandatoryFields: false });
+        log.audit('BM_MatchEngine',
+            'Customer Payment ' + newId + ' created and applied to Invoice ' + invoiceId);
+        return String(newId);
+    }
+
+    /**
+     * Create a Vendor Payment and apply it to the matched Vendor Bill.
+     * Caller must stamp custbody_bank_transaction_id on the returned ID.
+     *
+     * @param {Object} proposal  { nsId: vendorBillId, bankAmount, bankDate, bankRef }
+     * @returns {string}  Internal ID of the new Vendor Payment
+     */
+    function applyVendorPayment(proposal) {
+        var billId   = proposal.nsId;
+        var bankAmt  = parseFloat(proposal.bankAmount);
+        var bankDate = _parseDate(proposal.bankDate) || new Date();
+
+        var billRec  = record.load({ type: record.Type.VENDOR_BILL, id: billId });
+        var vendorId = billRec.getValue('entity');
+        var currency = billRec.getValue('currency');
+        var apAcct   = billRec.getValue('account');  // AP account
+
+        var payment = record.create({ type: record.Type.VENDOR_PAYMENT, isDynamic: true });
+        payment.setValue({ fieldId: 'entity',   value: vendorId });
+        payment.setValue({ fieldId: 'trandate', value: bankDate });
+        payment.setValue({ fieldId: 'currency', value: currency });
+        if (apAcct) payment.setValue({ fieldId: 'account', value: apAcct });
+        payment.setValue({ fieldId: 'memo',
+            value: 'Bank Match – bank ref: ' + (proposal.bankRef || '') });
+
+        var lineCount = payment.getLineCount({ sublistId: 'apply' });
+        for (var i = 0; i < lineCount; i++) {
+            var lineId = payment.getSublistValue({
+                sublistId: 'apply', fieldId: 'internalid', line: i
+            });
+            if (String(lineId) === String(billId)) {
+                payment.selectLine({ sublistId: 'apply', line: i });
+                payment.setCurrentSublistValue({
+                    sublistId: 'apply', fieldId: 'apply',  value: true
+                });
+                payment.setCurrentSublistValue({
+                    sublistId: 'apply', fieldId: 'amount', value: bankAmt
+                });
+                payment.commitLine({ sublistId: 'apply' });
+                break;
+            }
+        }
+
+        var newId = payment.save({ enableSourcing: true, ignoreMandatoryFields: false });
+        log.audit('BM_MatchEngine',
+            'Vendor Payment ' + newId + ' created and applied to Bill ' + billId);
+        return String(newId);
+    }
+
+    /**
+     * Create a Journal Entry to account for a bank transaction against a GL account.
+     * Caller must stamp custbody_bank_transaction_id on the returned ID.
+     *
+     * Positive bankAmount (credit) → Debit bank account, Credit the GL account.
+     * Negative bankAmount (debit)  → Credit bank account, Debit the GL account.
+     *
+     * @param {Object}       proposal       { nsId: glAccountId, bankAmount, bankDate, bankRef }
+     * @param {string|number} bankGlAcctId  Bank GL account internal ID (from settings)
+     * @returns {string}  Internal ID of the new Journal Entry
+     */
+    function applyJournalEntry(proposal, bankGlAcctId) {
+        var glAccountId = proposal.nsId;
+        var bankAmt     = parseFloat(proposal.bankAmount);
+        var bankDate    = _parseDate(proposal.bankDate) || new Date();
+        var isCredit    = bankAmt > 0;
+        var absAmt      = Math.abs(bankAmt);
+
+        var je = record.create({ type: record.Type.JOURNAL_ENTRY, isDynamic: true });
+        je.setValue({ fieldId: 'trandate', value: bankDate });
+        je.setValue({ fieldId: 'memo',
+            value: 'Bank Match – bank ref: ' + (proposal.bankRef || '') });
+
+        if (isCredit) {
+            // Money in: Debit bank account, Credit income/GL account
+            je.selectNewLine({ sublistId: 'line' });
+            je.setCurrentSublistValue({
+                sublistId: 'line', fieldId: 'account', value: bankGlAcctId
+            });
+            je.setCurrentSublistValue({
+                sublistId: 'line', fieldId: 'debit', value: absAmt
+            });
+            je.commitLine({ sublistId: 'line' });
+
+            je.selectNewLine({ sublistId: 'line' });
+            je.setCurrentSublistValue({
+                sublistId: 'line', fieldId: 'account', value: glAccountId
+            });
+            je.setCurrentSublistValue({
+                sublistId: 'line', fieldId: 'credit', value: absAmt
+            });
+            je.commitLine({ sublistId: 'line' });
+        } else {
+            // Money out: Credit bank account, Debit expense/GL account
+            je.selectNewLine({ sublistId: 'line' });
+            je.setCurrentSublistValue({
+                sublistId: 'line', fieldId: 'account', value: bankGlAcctId
+            });
+            je.setCurrentSublistValue({
+                sublistId: 'line', fieldId: 'credit', value: absAmt
+            });
+            je.commitLine({ sublistId: 'line' });
+
+            je.selectNewLine({ sublistId: 'line' });
+            je.setCurrentSublistValue({
+                sublistId: 'line', fieldId: 'account', value: glAccountId
+            });
+            je.setCurrentSublistValue({
+                sublistId: 'line', fieldId: 'debit', value: absAmt
+            });
+            je.commitLine({ sublistId: 'line' });
+        }
+
+        var newId = je.save({ enableSourcing: true, ignoreMandatoryFields: false });
+        log.audit('BM_MatchEngine',
+            'Journal Entry ' + newId + ' created for GL account ' + glAccountId +
+            ' (bank account ' + bankGlAcctId + ')');
+        return String(newId);
     }
 
     return {
         findInvoiceMatches:         findInvoiceMatches,
-        findBillPaymentMatches:     findBillPaymentMatches,
+        findVendorBillMatches:      findVendorBillMatches,
         findOpenInvoicesByCustomer: findOpenInvoicesByCustomer,
-        findVendorPaymentsByVendor: findVendorPaymentsByVendor,
+        findOpenBillsByVendor:      findOpenBillsByVendor,
         applyCustomerPayment:       applyCustomerPayment,
-        applyBillPayment:           applyBillPayment
+        applyVendorPayment:         applyVendorPayment,
+        applyJournalEntry:          applyJournalEntry
     };
 });
