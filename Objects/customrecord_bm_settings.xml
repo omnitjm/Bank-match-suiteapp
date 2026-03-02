@@ -78,6 +78,30 @@
       <helptext>When enabled, the best match candidate is automatically proposed when bank lines are imported (still requires approval).</helptext>
     </customrecordcustomfield>
 
+    <!-- ── Advanced Matching & Posting Settings ──────────────────────────── -->
+
+    <customrecordcustomfield scriptid="custrecord_bm_fee_account">
+      <fieldtype>SELECT</fieldtype>
+      <label>Default Bank Fee Account</label>
+      <selectrecordtype>-10</selectrecordtype>
+      <ismandatory>F</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>GL expense account used to post the variance difference when a payment is created with an amount tolerance gap (Match with Variance).</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_suspense_account">
+      <fieldtype>SELECT</fieldtype>
+      <label>Default Suspense Account</label>
+      <selectrecordtype>-10</selectrecordtype>
+      <ismandatory>F</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>GL suspense account used as a quick-select default in the Manual Matching UI for unknown or unidentified transactions.</helptext>
+    </customrecordcustomfield>
+
   </fields>
   <hierarchytype>NONE</hierarchytype>
   <isinactive>F</isinactive>

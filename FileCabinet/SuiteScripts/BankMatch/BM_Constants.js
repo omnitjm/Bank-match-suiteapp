@@ -44,12 +44,14 @@ define([], function () {
 
         // ── Settings Record Field IDs ────────────────────────────────────────
         SETTINGS_FIELDS: {
-            BANK_ACCOUNT:    'custrecord_bm_bank_account',   // SELECT → Account
-            SUBSIDIARY:      'custrecord_bm_subsidiary',      // SELECT → Subsidiary
-            TOLERANCE_AMT:   'custrecord_bm_tolerance_amt',   // CURRENCY
-            TOLERANCE_DAYS:  'custrecord_bm_tolerance_days',  // INTEGER
-            APPROVER:        'custrecord_bm_approver',        // SELECT → Employee
-            AUTO_SUGGEST:    'custrecord_bm_auto_suggest'     // CHECKBOX
+            BANK_ACCOUNT:      'custrecord_bm_bank_account',    // SELECT → Account
+            SUBSIDIARY:        'custrecord_bm_subsidiary',       // SELECT → Subsidiary
+            TOLERANCE_AMT:     'custrecord_bm_tolerance_amt',    // CURRENCY  (max variance for auto-match)
+            TOLERANCE_DAYS:    'custrecord_bm_tolerance_days',   // INTEGER
+            APPROVER:          'custrecord_bm_approver',         // SELECT → Employee
+            AUTO_SUGGEST:      'custrecord_bm_auto_suggest',     // CHECKBOX
+            FEE_ACCOUNT:       'custrecord_bm_fee_account',      // SELECT → Account (variance write-off GL)
+            SUSPENSE_ACCOUNT:  'custrecord_bm_suspense_account'  // SELECT → Account (manual match default)
         },
 
         // ── Bank Transaction Record Field IDs ────────────────────────────────
@@ -82,6 +84,11 @@ define([], function () {
             BANK_DATE:       'custrecord_bm_prop_bank_date',   // DATE
             BANK_REF:        'custrecord_bm_prop_bank_ref',    // TEXT
             BANK_LINE_ID:    'custrecord_bm_prop_bank_line',   // TEXT – native bank line ID
+
+            // ── Variance / tolerance metadata ────────────────────────────────
+            HAS_VARIANCE:    'custrecord_bm_prop_has_variance', // CHECKBOX – variance detected
+            VARIANCE_AMT:    'custrecord_bm_prop_variance_amt', // CURRENCY – abs(bankAmt - nsBalance)
+            BANK_ACCT:       'custrecord_bm_prop_bank_acct',    // SELECT → Account (for multi-acct filter)
 
             // ── Idempotency & apply-locking ───────────────────────────────────
             IDEMPOTENCY_KEY: 'custrecord_bm_idempotency_key',  // TEXT – deduplication key

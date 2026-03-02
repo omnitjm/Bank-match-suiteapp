@@ -237,6 +237,42 @@
       <helptext>Internal ID of the NetSuite transaction created or updated when this proposal was applied.</helptext>
     </customrecordcustomfield>
 
+    <!-- ── Variance / Tolerance metadata ──────────────────────────────────── -->
+
+    <customrecordcustomfield scriptid="custrecord_bm_prop_has_variance">
+      <fieldtype>CHECKBOX</fieldtype>
+      <label>Has Variance</label>
+      <ismandatory>F</ismandatory>
+      <defaultchecked>F</defaultchecked>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Checked when the auto-match found a strong document-number reference but the bank amount differs from the open balance by up to the configured tolerance. The variance will be posted to the Bank Fee Account on approval.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_prop_variance_amt">
+      <fieldtype>CURRENCY</fieldtype>
+      <label>Variance Amount</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Absolute difference between the bank amount and the NetSuite open balance when a Match with Variance is detected. Posted to the Default Bank Fee Account on approval.</helptext>
+    </customrecordcustomfield>
+
+    <!-- ── Bank Account link (for multi-account filtering) ────────────────── -->
+
+    <customrecordcustomfield scriptid="custrecord_bm_prop_bank_acct">
+      <fieldtype>SELECT</fieldtype>
+      <label>Bank Account</label>
+      <selectrecordtype>-10</selectrecordtype>
+      <ismandatory>F</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>The GL bank account this proposal belongs to. Populated automatically from the active bank account context when the proposal is created. Used by the Global Overview to count proposals per account.</helptext>
+    </customrecordcustomfield>
+
   </fields>
   <hierarchytype>NONE</hierarchytype>
   <isinactive>F</isinactive>
