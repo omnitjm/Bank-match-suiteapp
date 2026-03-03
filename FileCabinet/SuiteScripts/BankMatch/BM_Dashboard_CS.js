@@ -6,18 +6,70 @@
  *
  * Client-side logic for the Bank Match Central Suitelet.
  *
- * New in this version:
+ * Features:
  *   - goOverview()    – navigate back to the Global Overview (Master view)
- *   - fieldChanged()  – when Subsidiary changes in the workspace filters,
- *                       reload the page so the Bank Account dropdown is
- *                       re-populated server-side with only accounts for
- *                       the selected subsidiary (cascading filter)
- *   - runAutoMatch()  – now passes bank_account + subsidiary URL params
+ *   - fieldChanged()  – (1) when Subsidiary changes, reload for cascading filter
+ *                       (2) when inv_chk / bill_chk changes on multi-apply pages,
+ *                           update the running Remaining Amount counter
+ *   - runAutoMatch()  – passes bank_account + subsidiary URL params
+ *   - Multi-apply counter helpers: _updateRemainingCounter()
  */
 define(['N/url', 'N/currentRecord'], function (url, currentRecord) {
     'use strict';
 
     function pageInit() { /* no init needed */ }
+
+    // ── Running-amount counter (Multi-Apply entity pages) ─────────────────
+
+    /**
+     * Recalculate the "Selected / Remaining" counter displayed above the
+     * invoice or bill sublist on the multi-apply entity pages.
+     *
+     * @param {Record} rec         currentRecord obtained from context
+     * @param {string} sublistId   'sl_invoices' or 'sl_bills'
+     * @param {string} checkboxFld 'inv_chk' or 'bill_chk'
+     * @param {string} amountFld   'inv_remain' or 'bill_remain'
+     * @param {number} currentLine The line index that just changed (context.line)
+     */
+    function _updateRemainingCounter(rec, sublistId, checkboxFld, amountFld, currentLine) {
+        var bankAmtEl = document.getElementById('custpage_bank_line_amt');
+        if (!bankAmtEl) return;
+        var bankAmt   = parseFloat(bankAmtEl.value) || 0;
+
+        var lineCount    = rec.getLineCount({ sublistId: sublistId });
+        var totalSelected = 0;
+
+        for (var i = 0; i < lineCount; i++) {
+            var chk, amt;
+            try {
+                if (i === currentLine) {
+                    // The line being edited — read from current (uncommitted) state
+                    chk = rec.getCurrentSublistValue({ sublistId: sublistId, fieldId: checkboxFld });
+                    amt = parseFloat(rec.getCurrentSublistValue({ sublistId: sublistId, fieldId: amountFld })) || 0;
+                } else {
+                    chk = rec.getSublistValue({ sublistId: sublistId, fieldId: checkboxFld, line: i });
+                    amt = parseFloat(rec.getSublistValue({ sublistId: sublistId, fieldId: amountFld, line: i })) || 0;
+                }
+            } catch (e) { continue; }
+
+            if (chk === true || chk === 'T' || chk === 'true') {
+                totalSelected += amt;
+            }
+        }
+
+        var remaining = bankAmt - totalSelected;
+        var el = document.getElementById('custpage_remaining_counter');
+        if (!el) return;
+
+        var color = Math.abs(remaining) < 0.005
+            ? '#2e7d32'               // green — fully allocated
+            : (remaining < 0 ? '#c62828' : '#e65100'); // red — over, orange — under
+
+        el.innerHTML =
+            'Selected: ' + totalSelected.toFixed(2) +
+            ' &nbsp;|&nbsp; Remaining: <strong style="color:' + color + ';">' +
+            remaining.toFixed(2) + '</strong>';
+    }
 
     // ── Navigation helpers ────────────────────────────────────────────────
 
@@ -45,16 +97,37 @@ define(['N/url', 'N/currentRecord'], function (url, currentRecord) {
     // ── Cascading Subsidiary → Bank Account filter ─────────────────────────
 
     /**
-     * fieldChanged event.
-     * When the user picks a different Subsidiary in the workspace filter,
-     * reload the page with the new subsidiary param so the server can
-     * re-populate the Bank Account dropdown with only accounts for that
-     * subsidiary — preventing cross-subsidiary mismatches.
+     * fieldChanged event — handles two distinct use cases:
+     *
+     * 1. Multi-apply invoice/bill pages:
+     *    When 'inv_chk' or 'bill_chk' changes, recalculate the running
+     *    Remaining Amount counter displayed above the sublist.
+     *
+     * 2. Workspace Subsidiary filter:
+     *    When 'custpage_filter_subsidiary' changes, reload the page so
+     *    the server re-populates the Bank Account dropdown with only
+     *    accounts for that subsidiary.
      */
     function fieldChanged(context) {
-        if (context.fieldId !== 'custpage_filter_subsidiary') return;
+        var rec       = context.currentRecord;
+        var sublistId = context.sublistId || '';
+        var fieldId   = context.fieldId   || '';
 
-        var rec         = context.currentRecord;
+        // Multi-apply counter — invoice page
+        if (sublistId === 'sl_invoices' && fieldId === 'inv_chk') {
+            _updateRemainingCounter(rec, 'sl_invoices', 'inv_chk', 'inv_remain', context.line);
+            return;
+        }
+
+        // Multi-apply counter — bills page
+        if (sublistId === 'sl_bills' && fieldId === 'bill_chk') {
+            _updateRemainingCounter(rec, 'sl_bills', 'bill_chk', 'bill_remain', context.line);
+            return;
+        }
+
+        // Subsidiary cascading filter (workspace)
+        if (fieldId !== 'custpage_filter_subsidiary') return;
+
         var subsidiaryId  = rec.getValue({ fieldId: 'custpage_filter_subsidiary' }) || '';
         var bankAccountId = ''; // reset bank account when subsidiary changes
 

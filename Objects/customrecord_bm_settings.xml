@@ -102,6 +102,41 @@
       <helptext>GL suspense account used as a quick-select default in the Manual Matching UI for unknown or unidentified transactions.</helptext>
     </customrecordcustomfield>
 
+    <!-- ── Mandatory Segment Defaults (applied to all Journal Entry lines) ─── -->
+
+    <customrecordcustomfield scriptid="custrecord_bm_default_department">
+      <fieldtype>SELECT</fieldtype>
+      <label>Default Department</label>
+      <selectrecordtype>-123</selectrecordtype>
+      <ismandatory>F</ismandatory>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Default department applied to all Journal Entry lines created by Bank Match. Required when Department is a mandatory segment in your NetSuite account.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_default_class">
+      <fieldtype>SELECT</fieldtype>
+      <label>Default Class</label>
+      <selectrecordtype>-101</selectrecordtype>
+      <ismandatory>F</ismandatory>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Default class (classification) applied to all Journal Entry lines created by Bank Match. Required when Class is a mandatory segment in your NetSuite account.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_default_location">
+      <fieldtype>SELECT</fieldtype>
+      <label>Default Location</label>
+      <selectrecordtype>-104</selectrecordtype>
+      <ismandatory>F</ismandatory>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Default location applied to all Journal Entry lines created by Bank Match. Required when Location is a mandatory segment in your NetSuite account.</helptext>
+    </customrecordcustomfield>
+
   </fields>
   <hierarchytype>NONE</hierarchytype>
   <isinactive>F</isinactive>

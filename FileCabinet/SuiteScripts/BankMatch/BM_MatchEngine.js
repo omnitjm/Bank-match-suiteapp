@@ -600,8 +600,61 @@ define([
      * @param {boolean}       isAP             true → vendor/AP side, false → customer/AR side
      * @returns {string}  Journal Entry internal ID
      */
+    /**
+     * Apply default segments (department, class, location) to the current JE line.
+     * Only sets fields that are populated in settings — skips blanks silently.
+     *
+     * @param {Object} segments  { defaultDept, defaultClass, defaultLocation }
+     */
+    function _applySegments(segments) {
+        if (!segments) return;
+        if (segments.defaultDept) {
+            try {
+                je_current.setCurrentSublistValue({
+                    sublistId: 'line', fieldId: 'department', value: segments.defaultDept
+                });
+            } catch (e) { /* segment not enabled */ }
+        }
+        if (segments.defaultClass) {
+            try {
+                je_current.setCurrentSublistValue({
+                    sublistId: 'line', fieldId: 'class', value: segments.defaultClass
+                });
+            } catch (e) { /* segment not enabled */ }
+        }
+        if (segments.defaultLocation) {
+            try {
+                je_current.setCurrentSublistValue({
+                    sublistId: 'line', fieldId: 'location', value: segments.defaultLocation
+                });
+            } catch (e) { /* segment not enabled */ }
+        }
+    }
+
+    /**
+     * Apply default segments to the current line of a Journal Entry record.
+     * Accepts the je record directly (avoids closure over module-level var).
+     *
+     * @param {Record} je        NetSuite Journal Entry record (dynamic)
+     * @param {Object} segments  { defaultDept, defaultClass, defaultLocation }
+     */
+    function _applyJELineSegments(je, segments) {
+        if (!segments) return;
+        var pairs = [
+            ['department', segments.defaultDept],
+            ['class',      segments.defaultClass],
+            ['location',   segments.defaultLocation]
+        ];
+        pairs.forEach(function (pair) {
+            if (!pair[1]) return;
+            try {
+                je.setCurrentSublistValue({ sublistId: 'line', fieldId: pair[0], value: pair[1] });
+            } catch (e) { /* segment not active in this NS account — safe to ignore */ }
+        });
+    }
+
     function _createVarianceJE(tranDate, feeAccountId, controlAccountId, entityId,
-                                subsidiaryId, varianceAmt, memo, isAP) {
+                                subsidiaryId, varianceAmt, memo, isAP, segments) {
         var je = record.create({ type: record.Type.JOURNAL_ENTRY, isDynamic: true });
         je.setValue({ fieldId: 'trandate', value: tranDate });
         je.setValue({ fieldId: 'memo',     value: memo });
@@ -614,12 +667,14 @@ define([
             je.selectNewLine({ sublistId: 'line' });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: feeAccountId });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'debit',   value: varianceAmt });
+            _applyJELineSegments(je, segments);
             je.commitLine({ sublistId: 'line' });
 
             je.selectNewLine({ sublistId: 'line' });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: controlAccountId });
             if (entityId) je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'entity', value: entityId });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'credit',  value: varianceAmt });
+            _applyJELineSegments(je, segments);
             je.commitLine({ sublistId: 'line' });
         } else {
             // Vendor: DR AP account (with entity), CR fee account
@@ -627,15 +682,22 @@ define([
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: controlAccountId });
             if (entityId) je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'entity', value: entityId });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'debit',   value: varianceAmt });
+            _applyJELineSegments(je, segments);
             je.commitLine({ sublistId: 'line' });
 
             je.selectNewLine({ sublistId: 'line' });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: feeAccountId });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'credit',  value: varianceAmt });
+            _applyJELineSegments(je, segments);
             je.commitLine({ sublistId: 'line' });
         }
 
-        var jeId = je.save({ enableSourcing: true, ignoreMandatoryFields: false });
+        var jeId;
+        try {
+            jeId = je.save({ enableSourcing: true, ignoreMandatoryFields: false });
+        } catch (saveErr) {
+            throw new Error('Variance JE save failed: ' + saveErr.message);
+        }
         log.audit('BM_MatchEngine._createVarianceJE',
             'Variance JE ' + jeId + ' created: ' + varianceAmt.toFixed(2) +
             ' → fee acct ' + feeAccountId + ' | ctrl acct ' + controlAccountId);
@@ -698,7 +760,12 @@ define([
             }
         }
 
-        var newId = payment.save({ enableSourcing: true, ignoreMandatoryFields: false });
+        var newId;
+        try {
+            newId = payment.save({ enableSourcing: true, ignoreMandatoryFields: false });
+        } catch (saveErr) {
+            throw new Error('Customer Payment save failed: ' + saveErr.message);
+        }
         log.audit('BM_MatchEngine',
             'Customer Payment ' + newId + ' created, applied to Invoice ' + invoiceId +
             ', bank amount: ' + bankAmt);
@@ -716,7 +783,8 @@ define([
                     varianceAmt,
                     'Bank Match variance write-off – bank ref: ' + (proposal.bankRef || '') +
                         ' | Customer Payment: ' + newId,
-                    false
+                    false,
+                    settings
                 );
             } catch (jeErr) {
                 log.error('BM_MatchEngine.applyCustomerPayment',
@@ -779,7 +847,12 @@ define([
             }
         }
 
-        var newId = payment.save({ enableSourcing: true, ignoreMandatoryFields: false });
+        var newId;
+        try {
+            newId = payment.save({ enableSourcing: true, ignoreMandatoryFields: false });
+        } catch (saveErr) {
+            throw new Error('Vendor Payment save failed: ' + saveErr.message);
+        }
         log.audit('BM_MatchEngine',
             'Vendor Payment ' + newId + ' created, applied to Bill ' + billId +
             ', bank amount: ' + bankAmt);
@@ -797,7 +870,8 @@ define([
                     varianceAmt,
                     'Bank Match variance write-off – bank ref: ' + (proposal.bankRef || '') +
                         ' | Vendor Payment: ' + newId,
-                    true
+                    true,
+                    settings
                 );
             } catch (jeErr) {
                 log.error('BM_MatchEngine.applyVendorPayment',
@@ -819,9 +893,10 @@ define([
      *
      * @param {Object}        proposal      { nsId: glAccountId, bankAmount, bankDate, bankRef }
      * @param {string|number} bankGlAcctId  Bank GL account internal ID (from settings)
+     * @param {Object}        [segments]    { defaultDept, defaultClass, defaultLocation } — optional
      * @returns {string}  Internal ID of the new Journal Entry
      */
-    function applyJournalEntry(proposal, bankGlAcctId) {
+    function applyJournalEntry(proposal, bankGlAcctId, segments) {
         var glAccountId = proposal.nsId;
         var bankAmt     = parseFloat(proposal.bankAmount);
         var bankDate    = _parseDate(proposal.bankDate) || new Date();
@@ -838,29 +913,202 @@ define([
             je.selectNewLine({ sublistId: 'line' });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: bankGlAcctId });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'debit',   value: absAmt });
+            _applyJELineSegments(je, segments);
             je.commitLine({ sublistId: 'line' });
 
             je.selectNewLine({ sublistId: 'line' });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: glAccountId });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'credit',  value: absAmt });
+            _applyJELineSegments(je, segments);
             je.commitLine({ sublistId: 'line' });
         } else {
             // Money out: Credit bank account, Debit expense/GL account
             je.selectNewLine({ sublistId: 'line' });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: bankGlAcctId });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'credit',  value: absAmt });
+            _applyJELineSegments(je, segments);
             je.commitLine({ sublistId: 'line' });
 
             je.selectNewLine({ sublistId: 'line' });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: glAccountId });
             je.setCurrentSublistValue({ sublistId: 'line', fieldId: 'debit',   value: absAmt });
+            _applyJELineSegments(je, segments);
             je.commitLine({ sublistId: 'line' });
         }
 
-        var newId = je.save({ enableSourcing: true, ignoreMandatoryFields: false });
+        var newId;
+        try {
+            newId = je.save({ enableSourcing: true, ignoreMandatoryFields: false });
+        } catch (saveErr) {
+            throw new Error('Journal Entry save failed: ' + saveErr.message);
+        }
         log.audit('BM_MatchEngine',
             'Journal Entry ' + newId + ' created for GL account ' + glAccountId +
             ' (bank account ' + bankGlAcctId + ')');
+        return String(newId);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // MULTI-APPLY  (One bank line → multiple invoices / vendor bills)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Create a single Customer Payment and apply it to multiple invoices.
+     *
+     * The payment amount equals proposal.bankAmount.  Each invoice in invoiceIds
+     * is applied for its full remaining balance (or whatever NS auto-populates).
+     * If the total of selected invoice balances differs from bankAmount the payment
+     * will still be created — NetSuite allows unapplied amounts.
+     *
+     * @param {Object}   proposal    { bankAmount, bankDate, bankRef, hasVariance, varianceAmt }
+     * @param {Object}   [settings]  { feeAccount } — only needed for variance JE
+     * @param {string[]} invoiceIds  Array of Invoice internal IDs to apply against
+     * @returns {string}  Internal ID of the new Customer Payment
+     */
+    function applyCustomerPaymentMulti(proposal, settings, invoiceIds) {
+        if (!invoiceIds || !invoiceIds.length) {
+            throw new Error('applyCustomerPaymentMulti: no invoice IDs supplied');
+        }
+
+        var bankAmt  = parseFloat(proposal.bankAmount);
+        var bankDate = _parseDate(proposal.bankDate) || new Date();
+
+        // Derive customer/currency/subsidiary from the first invoice
+        var firstInv   = record.load({ type: record.Type.INVOICE, id: invoiceIds[0] });
+        var customerId = firstInv.getValue('entity');
+        var currency   = firstInv.getValue('currency');
+        var arAccount  = firstInv.getValue('account');
+        var subsidiary = firstInv.getValue('subsidiary');
+
+        var payment = record.create({ type: record.Type.CUSTOMER_PAYMENT, isDynamic: true });
+        payment.setValue({ fieldId: 'customer', value: customerId });
+        payment.setValue({ fieldId: 'trandate',  value: bankDate });
+        payment.setValue({ fieldId: 'payment',   value: bankAmt });
+        payment.setValue({ fieldId: 'currency',  value: currency });
+        payment.setValue({ fieldId: 'memo',
+            value: 'Bank Match (multi) – bank ref: ' + (proposal.bankRef || '') });
+
+        // Build a set of target IDs for fast lookup
+        var idSet = {};
+        invoiceIds.forEach(function (id) { idSet[String(id)] = true; });
+
+        var lineCount = payment.getLineCount({ sublistId: 'apply' });
+        for (var i = 0; i < lineCount; i++) {
+            var lineId = payment.getSublistValue({
+                sublistId: 'apply', fieldId: 'internalid', line: i
+            });
+            if (!idSet[String(lineId)]) continue;
+
+            payment.selectLine({ sublistId: 'apply', line: i });
+            payment.setCurrentSublistValue({ sublistId: 'apply', fieldId: 'apply', value: true });
+            // Use the auto-populated line amount (full remaining balance)
+            payment.commitLine({ sublistId: 'apply' });
+        }
+
+        var newId;
+        try {
+            newId = payment.save({ enableSourcing: true, ignoreMandatoryFields: false });
+        } catch (saveErr) {
+            throw new Error('Customer Payment (multi) save failed: ' + saveErr.message);
+        }
+        log.audit('BM_MatchEngine',
+            'Customer Payment (multi) ' + newId + ' created, applied to ' + invoiceIds.length +
+            ' invoice(s), bank amount: ' + bankAmt);
+
+        // ── Variance write-off JE (if flagged) ─────────────────────────────
+        var varianceAmt = parseFloat(proposal.varianceAmt) || 0;
+        if (proposal.hasVariance && varianceAmt > 0.001 && settings && settings.feeAccount) {
+            try {
+                _createVarianceJE(
+                    bankDate, settings.feeAccount, arAccount, customerId, subsidiary,
+                    varianceAmt,
+                    'Bank Match variance write-off (multi) – bank ref: ' + (proposal.bankRef || '') +
+                        ' | Customer Payment: ' + newId,
+                    false, settings
+                );
+            } catch (jeErr) {
+                log.error('BM_MatchEngine.applyCustomerPaymentMulti',
+                    'Variance JE failed (payment ' + newId + ' already saved): ' + jeErr.message);
+            }
+        }
+
+        return String(newId);
+    }
+
+    /**
+     * Create a single Vendor Payment and apply it to multiple vendor bills.
+     *
+     * @param {Object}   proposal   { bankAmount, bankDate, bankRef, hasVariance, varianceAmt }
+     * @param {Object}   [settings] { feeAccount }
+     * @param {string[]} billIds    Array of VendorBill internal IDs to apply against
+     * @returns {string}  Internal ID of the new Vendor Payment
+     */
+    function applyVendorPaymentMulti(proposal, settings, billIds) {
+        if (!billIds || !billIds.length) {
+            throw new Error('applyVendorPaymentMulti: no bill IDs supplied');
+        }
+
+        var bankAmt  = parseFloat(proposal.bankAmount);
+        var bankDate = _parseDate(proposal.bankDate) || new Date();
+
+        // Derive vendor/currency/subsidiary from the first bill
+        var firstBill  = record.load({ type: record.Type.VENDOR_BILL, id: billIds[0] });
+        var vendorId   = firstBill.getValue('entity');
+        var currency   = firstBill.getValue('currency');
+        var apAcct     = firstBill.getValue('account');
+        var subsidiary = firstBill.getValue('subsidiary');
+
+        var payment = record.create({ type: record.Type.VENDOR_PAYMENT, isDynamic: true });
+        payment.setValue({ fieldId: 'entity',   value: vendorId });
+        payment.setValue({ fieldId: 'trandate',  value: bankDate });
+        payment.setValue({ fieldId: 'currency',  value: currency });
+        if (apAcct) payment.setValue({ fieldId: 'account', value: apAcct });
+        payment.setValue({ fieldId: 'memo',
+            value: 'Bank Match (multi) – bank ref: ' + (proposal.bankRef || '') });
+
+        // Build a set of target IDs for fast lookup
+        var idSet = {};
+        billIds.forEach(function (id) { idSet[String(id)] = true; });
+
+        var lineCount = payment.getLineCount({ sublistId: 'apply' });
+        for (var i = 0; i < lineCount; i++) {
+            var lineId = payment.getSublistValue({
+                sublistId: 'apply', fieldId: 'internalid', line: i
+            });
+            if (!idSet[String(lineId)]) continue;
+
+            payment.selectLine({ sublistId: 'apply', line: i });
+            payment.setCurrentSublistValue({ sublistId: 'apply', fieldId: 'apply', value: true });
+            payment.commitLine({ sublistId: 'apply' });
+        }
+
+        var newId;
+        try {
+            newId = payment.save({ enableSourcing: true, ignoreMandatoryFields: false });
+        } catch (saveErr) {
+            throw new Error('Vendor Payment (multi) save failed: ' + saveErr.message);
+        }
+        log.audit('BM_MatchEngine',
+            'Vendor Payment (multi) ' + newId + ' created, applied to ' + billIds.length +
+            ' bill(s), bank amount: ' + bankAmt);
+
+        // ── Variance write-off JE (if flagged) ─────────────────────────────
+        var varianceAmt = parseFloat(proposal.varianceAmt) || 0;
+        if (proposal.hasVariance && varianceAmt > 0.001 && settings && settings.feeAccount) {
+            try {
+                _createVarianceJE(
+                    bankDate, settings.feeAccount, apAcct, vendorId, subsidiary,
+                    varianceAmt,
+                    'Bank Match variance write-off (multi) – bank ref: ' + (proposal.bankRef || '') +
+                        ' | Vendor Payment: ' + newId,
+                    true, settings
+                );
+            } catch (jeErr) {
+                log.error('BM_MatchEngine.applyVendorPaymentMulti',
+                    'Variance JE failed (payment ' + newId + ' already saved): ' + jeErr.message);
+            }
+        }
+
         return String(newId);
     }
 
@@ -883,9 +1131,13 @@ define([
         findOpenInvoicesByCustomer: findOpenInvoicesByCustomer,
         findOpenBillsByVendor:      findOpenBillsByVendor,
 
-        // Transaction creation
+        // Single-record transaction creation
         applyCustomerPayment:       applyCustomerPayment,
         applyVendorPayment:         applyVendorPayment,
-        applyJournalEntry:          applyJournalEntry
+        applyJournalEntry:          applyJournalEntry,
+
+        // Multi-apply: one bank line → multiple invoices / bills
+        applyCustomerPaymentMulti:  applyCustomerPaymentMulti,
+        applyVendorPaymentMulti:    applyVendorPaymentMulti
     };
 });

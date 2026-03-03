@@ -191,7 +191,7 @@ define([
                     );
                 }
 
-                appliedId = engine.applyJournalEntry(proposal, settings.bankAccount);
+                appliedId = engine.applyJournalEntry(proposal, settings.bankAccount, settings);
 
                 if (normRef && appliedId) {
                     record.submitFields({

@@ -101,7 +101,10 @@ define([
             approver:        r.getValue(SF.APPROVER),
             autoSuggest:     r.getValue(SF.AUTO_SUGGEST),
             feeAccount:      r.getValue(SF.FEE_ACCOUNT)      || '',
-            suspenseAccount: r.getValue(SF.SUSPENSE_ACCOUNT) || ''
+            suspenseAccount: r.getValue(SF.SUSPENSE_ACCOUNT) || '',
+            defaultDept:     r.getValue(SF.DEFAULT_DEPT)     || '',
+            defaultClass:    r.getValue(SF.DEFAULT_CLASS)    || '',
+            defaultLocation: r.getValue(SF.DEFAULT_LOCATION) || ''
         };
     }
 
@@ -359,8 +362,8 @@ define([
                 PF.TXN_TYPE, PF.NS_RECORD_REF,
                 PF.BANK_DATE, PF.BANK_AMOUNT, PF.BANK_REF,
                 PF.MATCH_AMOUNT, PF.STATUS, PF.NOTES,
-                PF.APPLIED_DATE, PF.ERROR_MSG, PF.APPLIED_TXN_ID,
-                PF.HAS_VARIANCE, PF.VARIANCE_AMT
+                PF.APPLIED_DATE, PF.ERROR_MSG, PF.APPLY_ERROR,
+                PF.APPLIED_TXN_ID, PF.HAS_VARIANCE, PF.VARIANCE_AMT
             ]
         }).run().each(function (row) {
             results.push({
@@ -376,6 +379,7 @@ define([
                 notes:        row.getValue(PF.NOTES),
                 appliedDate:  row.getValue(PF.APPLIED_DATE),
                 errorMsg:     row.getValue(PF.ERROR_MSG),
+                applyError:   row.getValue(PF.APPLY_ERROR),
                 appliedTxnId: row.getValue(PF.APPLIED_TXN_ID),
                 hasVariance:  row.getValue(PF.HAS_VARIANCE) === 'T',
                 varianceAmt:  parseFloat(row.getValue(PF.VARIANCE_AMT)) || 0
@@ -545,6 +549,46 @@ define([
             '</div>'
         ].join('');
 
+        // ── Failed proposals warning banner ────────────────────────────────
+        var failed = _getProposals([PS.FAILED], bankAccountId);
+        if (failed.length > 0) {
+            var failFld = form.addField({
+                id:    'custpage_fail_banner',
+                type:  ui.FieldType.INLINEHTML,
+                label: ' '
+            });
+            var failRows = failed.slice(0, 5).map(function (p) {
+                var errText = (p.applyError || p.errorMsg || 'Unknown error').substring(0, 200);
+                return '<tr>' +
+                    '<td style="padding:2px 8px;font-weight:600;">' + (p.bankRef || p.id) + '</td>' +
+                    '<td style="padding:2px 8px;">' + (p.bankDate || '') + '</td>' +
+                    '<td style="padding:2px 8px;">' + (p.bankAmount || '') + '</td>' +
+                    '<td style="padding:2px 8px;color:#b71c1c;">' +
+                        errText.replace(/</g, '&lt;').replace(/>/g, '&gt;') +
+                    '</td>' +
+                    '</tr>';
+            }).join('');
+            var moreMsg = failed.length > 5
+                ? '<p style="margin:6px 0 0;font-size:11px;">… and ' + (failed.length - 5) +
+                  ' more. See History tab for full list.</p>'
+                : '';
+            failFld.defaultValue = [
+                '<div style="background:#ffebee;border:1px solid #ef9a9a;border-left:4px solid #c62828;',
+                'padding:10px 14px;border-radius:4px;margin-bottom:8px;font-size:12px;">',
+                '<strong style="color:#c62828;">&#9888; ' + failed.length + ' proposal(s) failed to apply.</strong>',
+                ' Review the errors below and correct the underlying issue, then re-approve the proposal.',
+                '<table style="margin-top:6px;width:100%;border-collapse:collapse;">',
+                '<thead><tr style="color:#555;font-size:11px;text-align:left;">',
+                '<th style="padding:2px 8px;">Bank Ref</th>',
+                '<th style="padding:2px 8px;">Date</th>',
+                '<th style="padding:2px 8px;">Amount</th>',
+                '<th style="padding:2px 8px;">Error</th>',
+                '</tr></thead><tbody>', failRows, '</tbody></table>',
+                moreMsg,
+                '</div>'
+            ].join('');
+        }
+
         // ═══════════════════════════════════════════════════════════════════
         //  Tab 1: Pending Proposals
         // ═══════════════════════════════════════════════════════════════════
@@ -675,10 +719,17 @@ define([
         sbHist.addField({ id: 'hh_match',   type: ui.FieldType.TEXT,     label: 'NS Transaction' });
         sbHist.addField({ id: 'hh_applied', type: ui.FieldType.DATE,     label: 'Applied On' });
         sbHist.addField({ id: 'hh_nstxn',   type: ui.FieldType.TEXT,     label: 'NS ID' });
-        sbHist.addField({ id: 'hh_error',   type: ui.FieldType.TEXT,     label: 'Error' });
+        sbHist.addField({ id: 'hh_error',   type: ui.FieldType.TEXT,     label: 'Error Detail' });
 
         history.forEach(function (p, i) {
-            sbHist.setSublistValue({ id: 'hh_status',  line: i, value: STATUS_LABELS[p.status] || p.status || '—' });
+            var isFailed  = p.status === PS.FAILED;
+            var statusLbl = isFailed
+                ? '\u26A0 FAILED'
+                : (STATUS_LABELS[p.status] || p.status || '—');
+            // Show the most specific error message available
+            var errText   = (p.applyError || p.errorMsg || '').substring(0, 150);
+
+            sbHist.setSublistValue({ id: 'hh_status',  line: i, value: statusLbl });
             sbHist.setSublistValue({ id: 'hh_type',    line: i, value: TYPE_LABELS[p.txnType]  || '—' });
             sbHist.setSublistValue({ id: 'hh_date',    line: i, value: p.bankDate     || '' });
             sbHist.setSublistValue({ id: 'hh_amount',  line: i, value: p.bankAmount   || 0 });
@@ -686,7 +737,7 @@ define([
             sbHist.setSublistValue({ id: 'hh_match',   line: i, value: p.nsRef        || '—' });
             sbHist.setSublistValue({ id: 'hh_applied', line: i, value: p.appliedDate  || '' });
             sbHist.setSublistValue({ id: 'hh_nstxn',   line: i, value: p.appliedTxnId || '' });
-            sbHist.setSublistValue({ id: 'hh_error',   line: i, value: (p.errorMsg || '').substring(0, 100) });
+            sbHist.setSublistValue({ id: 'hh_error',   line: i, value: errText });
         });
 
         form.addSubmitButton({ label: 'Approve Selected Proposals' });
@@ -1002,39 +1053,82 @@ define([
             '</div>'
         ].join('');
 
-        var sb = form.addSublist({
-            id: 'sl_invoices', type: ui.SublistType.LIST,
-            label: (invoices.length || 'No') + ' open invoice(s) — click Select to create a Customer Payment'
+        // Running-total counter — updated client-side as checkboxes are ticked
+        var counterFld = form.addField({
+            id:    'custpage_remaining_display',
+            type:  ui.FieldType.INLINEHTML,
+            label: ' '
         });
-        sb.addField({ id: 'inv_ref',    type: ui.FieldType.TEXT,     label: 'Invoice #' });
-        sb.addField({ id: 'inv_date',   type: ui.FieldType.DATE,     label: 'Invoice Date' });
-        sb.addField({ id: 'inv_due',    type: ui.FieldType.DATE,     label: 'Due Date' });
-        sb.addField({ id: 'inv_total',  type: ui.FieldType.CURRENCY, label: 'Invoice Total' });
-        sb.addField({ id: 'inv_remain', type: ui.FieldType.CURRENCY, label: 'Amount Remaining' });
-        sb.addField({ id: 'inv_memo',   type: ui.FieldType.TEXT,     label: 'Memo' });
-        sb.addField({ id: 'inv_select', type: ui.FieldType.URL,      label: 'Action' }).linkText = 'Select';
+        counterFld.defaultValue =
+            '<div id="custpage_remaining_counter" style="padding:6px 0;font-size:13px;">' +
+            'Selected: 0.00 &nbsp;|&nbsp; ' +
+            'Remaining: <strong style="color:#e65100;">' + bankLine.amount.toFixed(2) + '</strong>' +
+            '</div>';
+
+        // Hidden fields to carry context through POST
+        var hBankAmt = form.addField({ id: 'custpage_bank_line_amt', type: ui.FieldType.TEXT, label: 'Bank Amt' });
+        hBankAmt.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
+        hBankAmt.defaultValue = String(bankLine.amount);
+
+        var hiddenCtx = {
+            custpage_h_bankline:     bankLine.id,
+            custpage_h_bl_date:      bankLine.date,
+            custpage_h_bl_amt:       String(bankLine.amount),
+            custpage_h_bl_ref:       bankLine.reference,
+            custpage_h_bl_desc:      bankLine.description,
+            custpage_h_bank_account: bankAccountId || '',
+            custpage_h_subsidiary:   subsidiaryId  || ''
+        };
+        Object.keys(hiddenCtx).forEach(function (fid) {
+            var f = form.addField({ id: fid, type: ui.FieldType.TEXT, label: fid });
+            f.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
+            f.defaultValue = String(hiddenCtx[fid] || '');
+        });
+
+        var hAct = form.addField({ id: 'custpage_action', type: ui.FieldType.TEXT, label: 'Action' });
+        hAct.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
+        hAct.defaultValue = 'create_manual_multi';
+
+        var hType = form.addField({ id: 'custpage_txn_type', type: ui.FieldType.TEXT, label: 'Type' });
+        hType.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
+        hType.defaultValue = String(TT.CUSTOMER_PAYMENT);
+
+        // Multi-select invoice sublist (INLINEEDITOR allows checkboxes)
+        var sb = form.addSublist({
+            id:    'sl_invoices',
+            type:  ui.SublistType.INLINEEDITOR,
+            label: (invoices.length || 'No') + ' open invoice(s) — check Apply? boxes then click Create Payment'
+        });
+
+        sb.addField({ id: 'inv_chk',    type: ui.FieldType.CHECKBOX, label: 'Apply?' });
+
+        sb.addField({ id: 'inv_nsid',   type: ui.FieldType.TEXT,     label: 'ID' })
+          .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        sb.addField({ id: 'inv_ref',    type: ui.FieldType.TEXT,     label: 'Invoice #' })
+          .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        sb.addField({ id: 'inv_date',   type: ui.FieldType.DATE,     label: 'Invoice Date' })
+          .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        sb.addField({ id: 'inv_due',    type: ui.FieldType.DATE,     label: 'Due Date' })
+          .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        sb.addField({ id: 'inv_total',  type: ui.FieldType.CURRENCY, label: 'Invoice Total' })
+          .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        sb.addField({ id: 'inv_remain', type: ui.FieldType.CURRENCY, label: 'Amt Remaining' })
+          .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        sb.addField({ id: 'inv_memo',   type: ui.FieldType.TEXT,     label: 'Memo' })
+          .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
 
         invoices.forEach(function (inv, i) {
+            sb.setSublistValue({ id: 'inv_chk',    line: i, value: 'F' });
+            sb.setSublistValue({ id: 'inv_nsid',   line: i, value: String(inv.nsId) });
             sb.setSublistValue({ id: 'inv_ref',    line: i, value: inv.reference  || '—' });
             sb.setSublistValue({ id: 'inv_date',   line: i, value: inv.date       || '' });
             sb.setSublistValue({ id: 'inv_due',    line: i, value: inv.dueDate    || '' });
             sb.setSublistValue({ id: 'inv_total',  line: i, value: inv.origAmount || 0 });
             sb.setSublistValue({ id: 'inv_remain', line: i, value: inv.amount     || 0 });
             sb.setSublistValue({ id: 'inv_memo',   line: i, value: inv.memo       || '—' });
-            sb.setSublistValue({ id: 'inv_select', line: i, value: _slUrl({
-                action:       'create_manual',
-                txn_type:     TT.CUSTOMER_PAYMENT,
-                ns_id:        inv.nsId,
-                bank_account: bankAccountId,
-                subsidiary:   subsidiaryId || '',
-                bankline:     bankLine.id,
-                bl_date:      bankLine.date,
-                bl_amt:       bankLine.amount,
-                bl_ref:       bankLine.reference,
-                bl_desc:      bankLine.description
-            }) });
         });
 
+        form.addSubmitButton({ label: 'Create Customer Payment for Selected Invoice(s)' });
         context.response.writePage(form);
     }
 
@@ -1083,39 +1177,82 @@ define([
             '</div>'
         ].join('');
 
-        var sb = form.addSublist({
-            id: 'sl_bills', type: ui.SublistType.LIST,
-            label: (bills.length || 'No') + ' open bill(s) — click Select to create a Vendor Payment'
+        // Running-total counter — updated client-side as checkboxes are ticked
+        var counterFld = form.addField({
+            id:    'custpage_remaining_display',
+            type:  ui.FieldType.INLINEHTML,
+            label: ' '
         });
-        sb.addField({ id: 'bill_ref',    type: ui.FieldType.TEXT,     label: 'Bill #' });
-        sb.addField({ id: 'bill_date',   type: ui.FieldType.DATE,     label: 'Bill Date' });
-        sb.addField({ id: 'bill_due',    type: ui.FieldType.DATE,     label: 'Due Date' });
-        sb.addField({ id: 'bill_total',  type: ui.FieldType.CURRENCY, label: 'Bill Total' });
-        sb.addField({ id: 'bill_remain', type: ui.FieldType.CURRENCY, label: 'Amount Remaining' });
-        sb.addField({ id: 'bill_memo',   type: ui.FieldType.TEXT,     label: 'Memo' });
-        sb.addField({ id: 'bill_select', type: ui.FieldType.URL,      label: 'Action' }).linkText = 'Select';
+        counterFld.defaultValue =
+            '<div id="custpage_remaining_counter" style="padding:6px 0;font-size:13px;">' +
+            'Selected: 0.00 &nbsp;|&nbsp; ' +
+            'Remaining: <strong style="color:#e65100;">' + Math.abs(bankLine.amount).toFixed(2) + '</strong>' +
+            '</div>';
+
+        // Hidden fields to carry context through POST
+        var hBankAmt = form.addField({ id: 'custpage_bank_line_amt', type: ui.FieldType.TEXT, label: 'Bank Amt' });
+        hBankAmt.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
+        hBankAmt.defaultValue = String(Math.abs(bankLine.amount));
+
+        var hiddenCtx = {
+            custpage_h_bankline:     bankLine.id,
+            custpage_h_bl_date:      bankLine.date,
+            custpage_h_bl_amt:       String(bankLine.amount),
+            custpage_h_bl_ref:       bankLine.reference,
+            custpage_h_bl_desc:      bankLine.description,
+            custpage_h_bank_account: bankAccountId || '',
+            custpage_h_subsidiary:   subsidiaryId  || ''
+        };
+        Object.keys(hiddenCtx).forEach(function (fid) {
+            var f = form.addField({ id: fid, type: ui.FieldType.TEXT, label: fid });
+            f.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
+            f.defaultValue = String(hiddenCtx[fid] || '');
+        });
+
+        var hAct = form.addField({ id: 'custpage_action', type: ui.FieldType.TEXT, label: 'Action' });
+        hAct.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
+        hAct.defaultValue = 'create_manual_multi';
+
+        var hType = form.addField({ id: 'custpage_txn_type', type: ui.FieldType.TEXT, label: 'Type' });
+        hType.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
+        hType.defaultValue = String(TT.VENDOR_PAYMENT);
+
+        // Multi-select bills sublist (INLINEEDITOR allows checkboxes)
+        var sb = form.addSublist({
+            id:    'sl_bills',
+            type:  ui.SublistType.INLINEEDITOR,
+            label: (bills.length || 'No') + ' open bill(s) — check Apply? boxes then click Create Payment'
+        });
+
+        sb.addField({ id: 'bill_chk',    type: ui.FieldType.CHECKBOX, label: 'Apply?' });
+
+        sb.addField({ id: 'bill_nsid',   type: ui.FieldType.TEXT,     label: 'ID' })
+          .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        sb.addField({ id: 'bill_ref',    type: ui.FieldType.TEXT,     label: 'Bill #' })
+          .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        sb.addField({ id: 'bill_date',   type: ui.FieldType.DATE,     label: 'Bill Date' })
+          .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        sb.addField({ id: 'bill_due',    type: ui.FieldType.DATE,     label: 'Due Date' })
+          .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        sb.addField({ id: 'bill_total',  type: ui.FieldType.CURRENCY, label: 'Bill Total' })
+          .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        sb.addField({ id: 'bill_remain', type: ui.FieldType.CURRENCY, label: 'Amt Remaining' })
+          .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        sb.addField({ id: 'bill_memo',   type: ui.FieldType.TEXT,     label: 'Memo' })
+          .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
 
         bills.forEach(function (bill, i) {
+            sb.setSublistValue({ id: 'bill_chk',    line: i, value: 'F' });
+            sb.setSublistValue({ id: 'bill_nsid',   line: i, value: String(bill.nsId) });
             sb.setSublistValue({ id: 'bill_ref',    line: i, value: bill.reference  || '—' });
             sb.setSublistValue({ id: 'bill_date',   line: i, value: bill.date       || '' });
             sb.setSublistValue({ id: 'bill_due',    line: i, value: bill.dueDate    || '' });
             sb.setSublistValue({ id: 'bill_total',  line: i, value: bill.origAmount || 0 });
             sb.setSublistValue({ id: 'bill_remain', line: i, value: bill.amount     || 0 });
             sb.setSublistValue({ id: 'bill_memo',   line: i, value: bill.memo       || '—' });
-            sb.setSublistValue({ id: 'bill_select', line: i, value: _slUrl({
-                action:       'create_manual',
-                txn_type:     TT.VENDOR_PAYMENT,
-                ns_id:        bill.nsId,
-                bank_account: bankAccountId,
-                subsidiary:   subsidiaryId || '',
-                bankline:     bankLine.id,
-                bl_date:      bankLine.date,
-                bl_amt:       bankLine.amount,
-                bl_ref:       bankLine.reference,
-                bl_desc:      bankLine.description
-            }) });
         });
 
+        form.addSubmitButton({ label: 'Create Vendor Payment for Selected Bill(s)' });
         context.response.writePage(form);
     }
 
@@ -1168,7 +1305,7 @@ define([
                 if (!bankAccountId) {
                     throw new Error('Bank GL account is not configured in Bank Match Settings.');
                 }
-                appliedId     = engine.applyJournalEntry(proposal, bankAccountId);
+                appliedId     = engine.applyJournalEntry(proposal, bankAccountId, settings);
                 txnRecordType = record.Type.JOURNAL_ENTRY;
 
             } else {
@@ -1202,6 +1339,85 @@ define([
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    //  ACTION: Create Multi-Apply Match (one payment → many invoices/bills)
+    // ════════════════════════════════════════════════════════════════════════
+
+    function _handleCreateManualMulti(context, settings, params, req) {
+        var txnType       = params.custpage_txn_type || '';
+        var bankAccountId = params.custpage_h_bank_account || settings.bankAccount;
+        var bankDate      = params.custpage_h_bl_date  || '';
+        var bankAmt       = parseFloat(params.custpage_h_bl_amt || 0);
+        var bankRef       = params.custpage_h_bl_ref   || '';
+        var bankDesc      = params.custpage_h_bl_desc  || '';
+
+        var isInv     = String(txnType) === String(TT.CUSTOMER_PAYMENT);
+        var groupName = isInv ? 'sl_invoices' : 'sl_bills';
+        var checkFld  = isInv ? 'inv_chk'     : 'bill_chk';
+        var idFld     = isInv ? 'inv_nsid'    : 'bill_nsid';
+
+        var lineCount = req.getLineCount({ group: groupName });
+        var nsIds = [];
+        for (var i = 0; i < lineCount; i++) {
+            var chk  = req.getSublistValue({ group: groupName, name: checkFld, line: i });
+            var nsId = req.getSublistValue({ group: groupName, name: idFld,    line: i });
+            if ((chk === 'T' || chk === true) && nsId) nsIds.push(nsId);
+        }
+
+        if (!nsIds.length) {
+            _redirect(context,
+                'No records selected. Check at least one Apply? box before submitting.',
+                bankAccountId);
+            return;
+        }
+
+        var proposal = {
+            bankAmount:  bankAmt,
+            bankDate:    bankDate,
+            bankRef:     bankRef || bankDesc,
+            hasVariance: false,
+            varianceAmt: 0
+        };
+        var normRef       = C.normalizeTxnId(bankRef || bankDesc);
+        var appliedId     = null;
+        var txnRecordType = null;
+
+        try {
+            if (isInv) {
+                appliedId     = engine.applyCustomerPaymentMulti(proposal, settings, nsIds);
+                txnRecordType = record.Type.CUSTOMER_PAYMENT;
+            } else {
+                appliedId     = engine.applyVendorPaymentMulti(proposal, settings, nsIds);
+                txnRecordType = record.Type.VENDOR_PAYMENT;
+            }
+
+            if (normRef && appliedId) {
+                record.submitFields({
+                    type:    txnRecordType,
+                    id:      appliedId,
+                    values:  { [C.BODY_FIELD.BANK_TXN_ID]: normRef },
+                    options: { enableSourcing: false, ignoreMandatoryFields: true }
+                });
+            }
+
+            log.audit('BM_Main_SL.create_manual_multi',
+                TYPE_LABELS[txnType] + ' ' + appliedId + ' created, applied to ' +
+                nsIds.length + ' record(s)');
+
+            _redirect(context,
+                TYPE_LABELS[txnType] + ' created (ID: ' + appliedId + ') — applied to ' +
+                nsIds.length + ' record(s). Bank transaction ID stamped.',
+                bankAccountId);
+
+        } catch (e) {
+            log.error('BM_Main_SL.create_manual_multi', e.message);
+            _redirect(context,
+                'ERROR creating multi-apply ' + (TYPE_LABELS[txnType] || 'payment') +
+                ': ' + e.message,
+                bankAccountId);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     //  ENTRY POINT
     // ════════════════════════════════════════════════════════════════════════
 
@@ -1213,8 +1429,10 @@ define([
         // ── POST ────────────────────────────────────────────────────────────
         if (req.method === 'POST') {
             var postAction = params.custpage_action || params.custpage_action_c || '';
-            if (postAction === 'create_manual') {
-                var settings0 = _getSettings() || {};
+            var settings0  = _getSettings() || {};
+            if (postAction === 'create_manual_multi') {
+                _handleCreateManualMulti(context, settings0, params, req);
+            } else if (postAction === 'create_manual') {
                 _handleCreateManual(context, settings0, params);
             } else {
                 _handleApproveProposals(context);

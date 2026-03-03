@@ -45,7 +45,10 @@ define([
                 approver:        row.getValue(SF.APPROVER),
                 autoSuggest:     row.getValue(SF.AUTO_SUGGEST),
                 feeAccount:      row.getValue(SF.FEE_ACCOUNT),
-                suspenseAccount: row.getValue(SF.SUSPENSE_ACCOUNT)
+                suspenseAccount: row.getValue(SF.SUSPENSE_ACCOUNT),
+                defaultDept:     row.getValue(SF.DEFAULT_DEPT)     || '',
+                defaultClass:    row.getValue(SF.DEFAULT_CLASS)    || '',
+                defaultLocation: row.getValue(SF.DEFAULT_LOCATION) || ''
             };
         }
         return null;
@@ -187,6 +190,52 @@ define([
         });
         fldSuspenseAcct.helpText = 'Quick-select default GL account shown in Manual Match for unknown transactions.';
 
+        // ─ Mandatory Segment Fallbacks ──────────────────────────────────────
+        var grpSeg = form.addFieldGroup({
+            id:    'grp_seg',
+            label: 'Mandatory Segment Defaults (Journal Entry Lines)'
+        });
+
+        var segNote = form.addField({
+            id:        'custpage_seg_note',
+            type:      ui.FieldType.INLINEHTML,
+            label:     ' ',
+            container: 'grp_seg'
+        });
+        segNote.defaultValue =
+            '<div style="padding:6px 0;color:#555;font-size:12px;">' +
+            '&#9432;&nbsp; If Department, Class, or Location are mandatory in your NetSuite account, ' +
+            'configure defaults here. They are applied to every Journal Entry line that Bank Match creates ' +
+            '(variance write-offs and manual GL matches). Leave blank if the segment is not in use.' +
+            '</div>';
+
+        var fldDept = form.addField({
+            id:        C.SETTINGS_FIELDS.DEFAULT_DEPT,
+            type:      ui.FieldType.SELECT,
+            label:     'Default Department',
+            source:    'department',
+            container: 'grp_seg'
+        });
+        fldDept.helpText = 'Applied to all Journal Entry lines when department is mandatory.';
+
+        var fldClass = form.addField({
+            id:        C.SETTINGS_FIELDS.DEFAULT_CLASS,
+            type:      ui.FieldType.SELECT,
+            label:     'Default Class',
+            source:    'classification',
+            container: 'grp_seg'
+        });
+        fldClass.helpText = 'Applied to all Journal Entry lines when class is mandatory.';
+
+        var fldLocation = form.addField({
+            id:        C.SETTINGS_FIELDS.DEFAULT_LOCATION,
+            type:      ui.FieldType.SELECT,
+            label:     'Default Location',
+            source:    'location',
+            container: 'grp_seg'
+        });
+        fldLocation.helpText = 'Applied to all Journal Entry lines when location is mandatory.';
+
         // ─ Set current values if settings exist ─────────────────────────────
         if (settings) {
             form.addField({ id: 'custpage_settings_id', type: ui.FieldType.TEXT, label: 'Settings ID' })
@@ -201,6 +250,9 @@ define([
             fldAutoSuggest.defaultValue  = settings.autoSuggest === 'T' ? 'T' : 'F';
             fldFeeAcct.defaultValue      = settings.feeAccount      || '';
             fldSuspenseAcct.defaultValue = settings.suspenseAccount || '';
+            fldDept.defaultValue         = settings.defaultDept     || '';
+            fldClass.defaultValue        = settings.defaultClass    || '';
+            fldLocation.defaultValue     = settings.defaultLocation || '';
         } else {
             fldTolAmt.defaultValue  = '50.00';
             fldTolDays.defaultValue = '5';
@@ -223,6 +275,9 @@ define([
         values[SF.AUTO_SUGGEST]      = params[SF.AUTO_SUGGEST]     || 'F';
         values[SF.FEE_ACCOUNT]       = params[SF.FEE_ACCOUNT]      || '';
         values[SF.SUSPENSE_ACCOUNT]  = params[SF.SUSPENSE_ACCOUNT] || '';
+        values[SF.DEFAULT_DEPT]      = params[SF.DEFAULT_DEPT]     || '';
+        values[SF.DEFAULT_CLASS]     = params[SF.DEFAULT_CLASS]    || '';
+        values[SF.DEFAULT_LOCATION]  = params[SF.DEFAULT_LOCATION] || '';
 
         if (settingsId) {
             record.submitFields({

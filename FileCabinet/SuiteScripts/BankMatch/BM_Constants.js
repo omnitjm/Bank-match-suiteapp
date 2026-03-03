@@ -44,14 +44,18 @@ define([], function () {
 
         // ── Settings Record Field IDs ────────────────────────────────────────
         SETTINGS_FIELDS: {
-            BANK_ACCOUNT:      'custrecord_bm_bank_account',    // SELECT → Account
-            SUBSIDIARY:        'custrecord_bm_subsidiary',       // SELECT → Subsidiary
-            TOLERANCE_AMT:     'custrecord_bm_tolerance_amt',    // CURRENCY  (max variance for auto-match)
-            TOLERANCE_DAYS:    'custrecord_bm_tolerance_days',   // INTEGER
-            APPROVER:          'custrecord_bm_approver',         // SELECT → Employee
-            AUTO_SUGGEST:      'custrecord_bm_auto_suggest',     // CHECKBOX
-            FEE_ACCOUNT:       'custrecord_bm_fee_account',      // SELECT → Account (variance write-off GL)
-            SUSPENSE_ACCOUNT:  'custrecord_bm_suspense_account'  // SELECT → Account (manual match default)
+            BANK_ACCOUNT:       'custrecord_bm_bank_account',      // SELECT → Account
+            SUBSIDIARY:         'custrecord_bm_subsidiary',         // SELECT → Subsidiary
+            TOLERANCE_AMT:      'custrecord_bm_tolerance_amt',      // CURRENCY  (max variance for auto-match)
+            TOLERANCE_DAYS:     'custrecord_bm_tolerance_days',     // INTEGER
+            APPROVER:           'custrecord_bm_approver',           // SELECT → Employee
+            AUTO_SUGGEST:       'custrecord_bm_auto_suggest',       // CHECKBOX
+            FEE_ACCOUNT:        'custrecord_bm_fee_account',        // SELECT → Account (variance write-off GL)
+            SUSPENSE_ACCOUNT:   'custrecord_bm_suspense_account',   // SELECT → Account (manual match default)
+            // Mandatory segment fallbacks — applied to all Journal Entry lines
+            DEFAULT_DEPT:       'custrecord_bm_default_department', // SELECT → Department
+            DEFAULT_CLASS:      'custrecord_bm_default_class',      // SELECT → Classification
+            DEFAULT_LOCATION:   'custrecord_bm_default_location'    // SELECT → Location
         },
 
         // ── Bank Transaction Record Field IDs ────────────────────────────────
