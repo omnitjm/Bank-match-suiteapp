@@ -42,6 +42,11 @@ Token-Based Authentication (TBA) is how the CLI talks to your account.
 
 ## Step 3 — Create an Access Token
 
+> **Before you start:** The Role dropdown only lists roles already assigned to the selected user.
+> If Administrator is not in the list, you must add it to your user first:
+> Setup → Users/Roles → Manage Users → find your user → Edit → Roles subtab → Add → **Administrator** → Save.
+> Then come back here.
+
 1. Setup → Users/Roles → Access Tokens → **New**
 2. Fill in:
    - **Application Name:** `Bank Match CLI`
