@@ -10,20 +10,23 @@
  *               with full idempotency and concurrency protection:
  *
  *   1. Early-exit if apply_status is already Processing or Applied.
- *   2. Set apply_status = Processing, increment apply_attempts.
- *   3. Execute engine based on txn_type:
- *        '1' CUSTOMER_PAYMENT → applyCustomerPayment (Invoice → Customer Payment)
- *        '2' VENDOR_PAYMENT   → applyVendorPayment   (Vendor Bill → Vendor Payment)
- *        '3' JOURNAL_ENTRY    → applyJournalEntry    (GL Account → Journal Entry)
- *   4. Set custbody_bank_transaction_id on the resulting NS transaction.
- *      Value is normalizeTxnId(bankRef) — trimmed, uppercased.
- *   5. Mark proposal Applied (or Failed) and record the NS txn ID.
+ *   2. Claim lock: set apply_status = Processing, increment apply_attempts.
+ *   3. Load full settings (bank account, fee account) from customrecord_bm_settings.
+ *   4. Load variance metadata from proposal (hasVariance, varianceAmt).
+ *   5. Execute engine based on txn_type:
+ *        '1' CUSTOMER_PAYMENT → applyCustomerPayment(proposal, settings)
+ *            • If hasVariance + feeAccount: also creates a variance write-off JE
+ *              (DR Bank Fee Account, CR AR control account)
+ *        '2' VENDOR_PAYMENT   → applyVendorPayment(proposal, settings)
+ *            • If hasVariance + feeAccount: also creates a variance write-off JE
+ *              (DR AP control account, CR Bank Fee Account)
+ *        '3' JOURNAL_ENTRY    → applyJournalEntry(proposal, bankGlAccount)
+ *   6. Stamp custbody_bank_transaction_id = normalizeTxnId(bankRef) on the
+ *      resulting NS transaction.  NEVER write tranid.
+ *   7. Mark proposal Applied or Failed, record NS txn ID and applied date.
  *
- * IMPORTANT:
- *   tranid is NEVER written here.
- *   custbody_bank_transaction_id is the sole field used for bank matching.
- *   After proposals are applied, NetSuite's native Reconciliation Rules
- *   automatically reconcile transactions stamped with this field.
+ * All settings (bankAccount, feeAccount) are loaded dynamically from
+ * customrecord_bm_settings — no hardcoded GL account IDs.
  */
 define([
     'N/record',
@@ -39,22 +42,34 @@ define([
     var AS = C.APPLY_STATUS;
     var TS = C.TXN_STATUS;
     var BF = C.BODY_FIELD;
+    var SF = C.SETTINGS_FIELDS;
 
-    // ── Load settings (needed for Journal Entry to get bank GL account) ────
+    // ── Load full settings from customrecord_bm_settings ─────────────────
+
     function _getSettings() {
-        var SF = C.SETTINGS_FIELDS;
         var rows = search.create({
             type:    C.RECORDS.SETTINGS,
             filters: [['isinactive', 'is', 'F']],
-            columns: [SF.BANK_ACCOUNT]
+            columns: [
+                SF.BANK_ACCOUNT,
+                SF.FEE_ACCOUNT,
+                SF.SUSPENSE_ACCOUNT,
+                SF.TOLERANCE_AMT
+            ]
         }).run().getRange({ start: 0, end: 1 });
 
         if (!rows || !rows.length) return null;
         var r = rows[0];
-        return { bankAccount: r.getValue(SF.BANK_ACCOUNT) };
+        return {
+            bankAccount:  r.getValue(SF.BANK_ACCOUNT),
+            feeAccount:   r.getValue(SF.FEE_ACCOUNT)      || '',
+            suspenseAcct: r.getValue(SF.SUSPENSE_ACCOUNT) || '',
+            toleranceAmt: parseFloat(r.getValue(SF.TOLERANCE_AMT)) || 50
+        };
     }
 
     // ── beforeLoad ────────────────────────────────────────────────────────
+
     function beforeLoad(context) {
         if (context.type !== context.UserEventType.VIEW &&
             context.type !== context.UserEventType.EDIT) return;
@@ -62,6 +77,7 @@ define([
     }
 
     // ── afterSubmit ───────────────────────────────────────────────────────
+
     function afterSubmit(context) {
         if (context.type === context.UserEventType.DELETE) return;
 
@@ -112,7 +128,7 @@ define([
             options: { ignoreMandatoryFields: true }
         });
 
-        // ── Gather proposal data ──────────────────────────────────────────
+        // ── Gather proposal data (including new variance fields) ──────────
         var proposal = {
             proposalId:  proposalId,
             nsId:        newRec.getValue(PF.NS_RECORD_ID),
@@ -121,7 +137,11 @@ define([
             bankAmount:  newRec.getValue(PF.BANK_AMOUNT),
             bankDate:    newRec.getValue(PF.BANK_DATE),
             bankRef:     newRec.getValue(PF.BANK_REF),
-            bankTxnId:   newRec.getValue(PF.BANK_TXN)
+            bankTxnId:   newRec.getValue(PF.BANK_TXN),
+            // Variance metadata — set by waterfall matching engine
+            hasVariance: newRec.getValue(PF.HAS_VARIANCE) === true ||
+                         newRec.getValue(PF.HAS_VARIANCE) === 'T',
+            varianceAmt: parseFloat(newRec.getValue(PF.VARIANCE_AMT)) || 0
         };
 
         // Normalized bank reference — written to custbody_bank_transaction_id
@@ -129,14 +149,16 @@ define([
         var errorMsg  = null;
         var appliedId = null;
 
+        // ── Load full settings (needed for Journal Entry GL account and fee account) ──
+        var settings = _getSettings();
+
         // ── Execute reconciliation ────────────────────────────────────────
         try {
             if (String(proposal.txnType) === String(C.TXN_TYPE.CUSTOMER_PAYMENT)) {
 
-                // Create Customer Payment applied to the Invoice
-                appliedId = engine.applyCustomerPayment(proposal);
+                // Create Customer Payment; engine also creates variance JE if needed
+                appliedId = engine.applyCustomerPayment(proposal, settings);
 
-                // Stamp custbody_bank_transaction_id
                 if (normRef && appliedId) {
                     record.submitFields({
                         type:    record.Type.CUSTOMER_PAYMENT,
@@ -148,10 +170,9 @@ define([
 
             } else if (String(proposal.txnType) === String(C.TXN_TYPE.VENDOR_PAYMENT)) {
 
-                // Create Vendor Payment applied to the Vendor Bill
-                appliedId = engine.applyVendorPayment(proposal);
+                // Create Vendor Payment; engine also creates variance JE if needed
+                appliedId = engine.applyVendorPayment(proposal, settings);
 
-                // Stamp custbody_bank_transaction_id
                 if (normRef && appliedId) {
                     record.submitFields({
                         type:    record.Type.VENDOR_PAYMENT,
@@ -163,19 +184,15 @@ define([
 
             } else if (String(proposal.txnType) === String(C.TXN_TYPE.JOURNAL_ENTRY)) {
 
-                // Load settings to get the bank GL account
-                var settings = _getSettings();
                 if (!settings || !settings.bankAccount) {
                     throw new Error(
-                        'Bank GL account not configured in Bank Match Settings ' +
-                        '— cannot create Journal Entry'
+                        'Bank GL account not configured in Bank Match Settings — ' +
+                        'cannot create Journal Entry'
                     );
                 }
 
-                // Create Journal Entry
                 appliedId = engine.applyJournalEntry(proposal, settings.bankAccount);
 
-                // Stamp custbody_bank_transaction_id
                 if (normRef && appliedId) {
                     record.submitFields({
                         type:    record.Type.JOURNAL_ENTRY,
@@ -217,7 +234,7 @@ define([
             options: { ignoreMandatoryFields: true }
         });
 
-        // ── Update bank transaction status (if linked to a custom record) ──
+        // ── Update bank transaction status (custom record path) ───────────
         if (!errorMsg && proposal.bankTxnId) {
             try {
                 var txnUpdate = {};
@@ -229,15 +246,17 @@ define([
                     options: { ignoreMandatoryFields: true }
                 });
             } catch (e2) {
-                log.error('BM_Proposal_UE',
-                    'Could not update bank txn status: ' + e2.message);
+                log.error('BM_Proposal_UE', 'Could not update bank txn status: ' + e2.message);
             }
         }
 
         log.audit('BM_Proposal_UE',
             'Proposal ' + proposalId + ' result: ' +
             (errorMsg ? 'FAILED' : 'APPLIED') +
-            (appliedId ? ' (NS ID ' + appliedId + ')' : ''));
+            (appliedId ? ' (NS ID ' + appliedId + ')' : '') +
+            (proposal.hasVariance && !errorMsg
+                ? ' | variance ' + proposal.varianceAmt.toFixed(2) + ' written off'
+                : ''));
     }
 
     return {

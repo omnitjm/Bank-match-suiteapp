@@ -4,31 +4,45 @@
  * @NModuleScope SameAccount
  * @NScriptType Suitelet
  *
- * Bank Match Central — the single workspace for all bank reconciliation tasks.
+ * Bank Match Central — Master/Detail workspace for all bank reconciliation tasks.
  *
  * ─── Architecture ─────────────────────────────────────────────────────────────
- * This Suitelet replaces the old DOM-injection approach (BM_NativePage_CS.js).
- * Everything happens here — auto-matching, proposal approval, manual matching.
+ * View 1 – Global Overview (Master)
+ *   Loads when no bank_account URL param is present.
+ *   Shows a Summary Sublist of every GL bank account across all accessible
+ *   Subsidiaries with: Subsidiary, Account Name, Unmatched Line Count,
+ *   Pending Proposal Count, and a "Go to Matching" action link.
+ *
+ * View 2 – Matching Workspace (Detail)
+ *   Loads when bank_account URL param is passed (e.g. after clicking "Go to
+ *   Matching" from the Overview, or when a Subsidiary + Account pair is selected).
+ *   Shows the full three-tab workspace filtered to that bank account:
+ *     Tab 1 – Pending Approvals  (INLINEEDITOR with Approve checkboxes)
+ *     Tab 2 – Unmatched Lines    (LIST with Manual Match links)
+ *     Tab 3 – History            (LIST, Applied / Rejected / Failed)
+ *   Top-level filter group has Subsidiary + Bank Account dropdowns.
+ *   Changing Subsidiary reloads the page; only bank accounts for that subsidiary
+ *   are populated in the Bank Account dropdown.
  *
  * ─── Routes (GET) ────────────────────────────────────────────────────────────
- *   (default)          Main workspace: filters + Proposals sublist + Unmatched Lines
- *   action=run_automatch  Run auto-match engine, redirect with summary flash
- *   action=approve_all    Approve ALL pending proposals, redirect with summary
- *   action=match          Manual match page for one bank line (3 options)
- *   action=entity_invoices  Open Invoices for a Customer (Option A)
- *   action=entity_bills     Open Bills for a Vendor (Option B)
- *   action=create_manual    Directly create Customer Payment / Vendor Payment /
- *                           Journal Entry from URL params (Options A, B, C via GET)
+ *   (default / no bank_account param) → _renderOverview
+ *   bank_account=<id>                  → _renderCentral (workspace)
+ *   action=run_automatch               → _handleRunAutoMatch
+ *   action=approve_all                 → _handleApproveAll
+ *   action=match                       → _renderMatchPage
+ *   action=entity_invoices             → _renderEntityInvoicesPage
+ *   action=entity_bills                → _renderEntityBillsPage
+ *   action=create_manual               → _handleCreateManual
  *
  * ─── Routes (POST) ───────────────────────────────────────────────────────────
- *   custpage_action=approve_proposals  Approve selected (checked) proposals
- *   custpage_action=create_manual      Create GL Journal Entry (Option C form submit)
+ *   custpage_action=approve_proposals  → _handleApproveProposals
+ *   custpage_action=create_manual      → _handleCreateManual (Option C)
  *
- * ─── Transaction Creation ─────────────────────────────────────────────────────
- * All three paths (auto-match approve, manual A, manual B, manual C) create the
- * correct NS transaction and stamp custbody_bank_transaction_id = normalizeTxnId(bankRef).
- * NetSuite's native Reconciliation Rules then auto-match the bank line to the
- * stamped transaction — no manual re-matching needed.
+ * ─── Matching Engine ──────────────────────────────────────────────────────────
+ * Auto-match now uses engine.runWaterfallMatch (Tier 1 / 2a / 2b / 3).
+ * Variance metadata (hasVariance, varianceAmt) is stored in every proposal.
+ * On approval, BM_Proposal_UE reads variance fields and calls applyCustomerPayment
+ * / applyVendorPayment with full settings so the fee-account JE is created.
  *
  * NEVER write tranid. Only write custbody_bank_transaction_id.
  */
@@ -49,7 +63,6 @@ define([
     var PS = C.PROPOSAL_STATUS;
     var TT = C.TXN_TYPE;
     var AS = C.APPLY_STATUS;
-    var SR = C.SKIP_REASON;
 
     var TYPE_LABELS = {
         '1': 'Customer Payment',
@@ -66,6 +79,10 @@ define([
     //  Shared helpers
     // ════════════════════════════════════════════════════════════════════════
 
+    /**
+     * Load the single BM settings record.
+     * Returns null if not yet configured.
+     */
     function _getSettings() {
         var rows = search.create({
             type:    C.RECORDS.SETTINGS,
@@ -76,15 +93,19 @@ define([
         if (!rows || !rows.length) return null;
         var r = rows[0];
         return {
-            id:          r.id,
-            bankAccount: r.getValue(SF.BANK_ACCOUNT),
-            subsidiary:  r.getValue(SF.SUBSIDIARY),
-            tolAmt:      parseFloat(r.getValue(SF.TOLERANCE_AMT))   || 0.01,
-            tolDays:     parseInt(r.getValue(SF.TOLERANCE_DAYS), 10) || 5,
-            approver:    r.getValue(SF.APPROVER)
+            id:              r.id,
+            bankAccount:     r.getValue(SF.BANK_ACCOUNT),
+            subsidiary:      r.getValue(SF.SUBSIDIARY),
+            toleranceAmt:    parseFloat(r.getValue(SF.TOLERANCE_AMT))   || 50,
+            toleranceDays:   parseInt(r.getValue(SF.TOLERANCE_DAYS), 10) || 5,
+            approver:        r.getValue(SF.APPROVER),
+            autoSuggest:     r.getValue(SF.AUTO_SUGGEST),
+            feeAccount:      r.getValue(SF.FEE_ACCOUNT)      || '',
+            suspenseAccount: r.getValue(SF.SUSPENSE_ACCOUNT) || ''
         };
     }
 
+    /** Resolve the main Suitelet URL with optional params. */
     function _slUrl(params) {
         return url.resolveScript({
             scriptId:          C.SCRIPTS.MAIN_SL,
@@ -94,13 +115,150 @@ define([
         });
     }
 
-    function _redirect(context, flash) {
+    /** Redirect to the main Suitelet workspace (or overview) with a flash message. */
+    function _redirect(context, flash, bankAccountId) {
+        var params = { flash: encodeURIComponent(flash || '') };
+        if (bankAccountId) params.bank_account = bankAccountId;
         context.response.sendRedirect({
             type:       'SUITELET',
             identifier: C.SCRIPTS.MAIN_SL,
             id:         C.SCRIPTS.MAIN_DEPLOY,
-            parameters: { flash: encodeURIComponent(flash || '') }
+            parameters: params
         });
+    }
+
+    // ── GL Bank Account helpers ────────────────────────────────────────────
+
+    /**
+     * Return all active GL accounts of type Bank.
+     * @returns {Array}  [{ id, name, subsidiaryId, subsidiaryName }]
+     */
+    function _getAllBankAccounts() {
+        var accounts = [];
+        try {
+            search.create({
+                type:    'account',
+                filters: [
+                    ['type',       'anyof', 'Bank'], 'AND',
+                    ['isinactive', 'is',    'F']
+                ],
+                columns: [
+                    'internalid', 'name',
+                    search.createColumn({ name: 'internalid', join: 'subsidiary', label: 'subId' }),
+                    search.createColumn({ name: 'name',       join: 'subsidiary', label: 'subName' })
+                ]
+            }).run().each(function (row) {
+                accounts.push({
+                    id:             row.getValue('internalid'),
+                    name:           row.getValue('name'),
+                    subsidiaryId:   row.getValue({ name: 'internalid', join: 'subsidiary', label: 'subId' }),
+                    subsidiaryName: row.getValue({ name: 'name',       join: 'subsidiary', label: 'subName' }) || '—'
+                });
+                return true;
+            });
+        } catch (e) {
+            log.error('BM_Main_SL._getAllBankAccounts', e.message);
+        }
+        return accounts;
+    }
+
+    /**
+     * Return active GL Bank accounts for a specific subsidiary (or all if no sub).
+     * @param {string|number} subsidiaryId
+     * @returns {Array}  [{ id, name }]
+     */
+    function _getBankAccountsForSubsidiary(subsidiaryId) {
+        var accounts = [];
+        var filters  = [
+            ['type',       'anyof', 'Bank'], 'AND',
+            ['isinactive', 'is',    'F']
+        ];
+        if (subsidiaryId) {
+            filters.push('AND');
+            filters.push(['subsidiary', 'anyof', String(subsidiaryId)]);
+        }
+        try {
+            search.create({
+                type:    'account',
+                filters: filters,
+                columns: ['internalid', 'name']
+            }).run().each(function (row) {
+                accounts.push({
+                    id:   row.getValue('internalid'),
+                    name: row.getValue('name')
+                });
+                return true;
+            });
+        } catch (e) {
+            log.error('BM_Main_SL._getBankAccountsForSubsidiary', e.message);
+        }
+        return accounts;
+    }
+
+    /**
+     * Look up the subsidiary ID of a given GL account.
+     * @returns {string}  subsidiary internal ID, or ''
+     */
+    function _getSubsidiaryForAccount(accountId) {
+        if (!accountId) return '';
+        try {
+            var lf = search.lookupFields({ type: 'account', id: accountId, columns: ['subsidiary'] });
+            var subs = lf.subsidiary;
+            return (subs && subs.length) ? subs[0].value : '';
+        } catch (e) {
+            return '';
+        }
+    }
+
+    /**
+     * Count unmatched bank lines for an account using BankStatementImportLine.
+     * Falls back to BankLineReader if SuiteQL is unavailable.
+     * @returns {number|string}  count or '?' on error
+     */
+    function _countUnmatchedLines(accountId) {
+        try {
+            var q = search.create({
+                type:    'bankstatementimportline',
+                filters: [
+                    ['account', 'anyof', accountId], 'AND',
+                    ['iscleared', 'is', 'F']
+                ],
+                columns: ['internalid']
+            });
+            var count = 0;
+            q.run().each(function () { count++; return count < 10000; });
+            return count;
+        } catch (e) {
+            // Fallback via reader
+            try {
+                return reader.getUnmatchedLines(accountId).lines.length;
+            } catch (e2) {
+                return '?';
+            }
+        }
+    }
+
+    /**
+     * Count pending proposals linked to a specific bank account.
+     * @returns {number}
+     */
+    function _countPendingProposals(accountId) {
+        if (!accountId) return 0;
+        var count = 0;
+        try {
+            search.create({
+                type:    C.RECORDS.PROPOSAL,
+                filters: [
+                    ['isinactive', 'is',    'F'],   'AND',
+                    [PF.STATUS,    'anyof', PS.PENDING], 'AND',
+                    [PF.BANK_ACCT, 'anyof', accountId]
+                ],
+                columns: ['internalid']
+            }).run().each(function () { count++; return count < 10000; });
+        } catch (e) {
+            log.error('BM_Main_SL._countPendingProposals', e.message);
+        }
+        return count;
     }
 
     // ── Auto-match proposal helpers ───────────────────────────────────────
@@ -129,12 +287,17 @@ define([
         return found;
     }
 
-    function _createProposalRecord(line, cand, settings, key) {
+    /**
+     * Create a proposal record from a waterfall match result.
+     * Stores variance metadata (hasVariance, varianceAmt) and bank account link.
+     */
+    function _createProposalRecord(line, matchResult, settings, key, bankAccountId) {
+        var cand     = matchResult.candidate;
         var isCredit = parseFloat(line.amount) > 0;
         var txnType  = isCredit ? TT.CUSTOMER_PAYMENT : TT.VENDOR_PAYMENT;
         var nsType   = isCredit ? 'invoice'           : 'vendorbill';
 
-        var propRec = record.create({ type: C.RECORDS.PROPOSAL });
+        var propRec  = record.create({ type: C.RECORDS.PROPOSAL });
         propRec.setValue({ fieldId: PF.TXN_TYPE,        value: txnType });
         propRec.setValue({ fieldId: PF.NS_RECORD_TYPE,  value: nsType });
         propRec.setValue({ fieldId: PF.NS_RECORD_ID,    value: parseInt(cand.nsId, 10) });
@@ -144,13 +307,22 @@ define([
             value: cand.date ? new Date(cand.date) : null });
         propRec.setValue({ fieldId: PF.STATUS,          value: PS.PENDING });
         propRec.setValue({ fieldId: PF.NOTES,
-            value: 'Auto-proposed (score ' + cand.score + ')' });
+            value: matchResult.matchReason + ' (score ' + matchResult.score + ')' });
         propRec.setValue({ fieldId: PF.BANK_AMOUNT,     value: line.amount });
         propRec.setValue({ fieldId: PF.BANK_DATE,
             value: line.date ? new Date(line.date) : null });
         propRec.setValue({ fieldId: PF.BANK_REF,        value: line.reference || '' });
         propRec.setValue({ fieldId: PF.IDEMPOTENCY_KEY, value: key || '' });
         propRec.setValue({ fieldId: PF.APPLY_STATUS,    value: AS.PENDING });
+
+        // Variance metadata
+        propRec.setValue({ fieldId: PF.HAS_VARIANCE, value: matchResult.hasVariance ? 'T' : 'F' });
+        propRec.setValue({ fieldId: PF.VARIANCE_AMT, value: matchResult.varianceAmt || 0 });
+
+        // Bank account link (for multi-account Global Overview filtering)
+        if (bankAccountId) {
+            try { propRec.setValue({ fieldId: PF.BANK_ACCT, value: bankAccountId }); } catch (e) { /* optional */ }
+        }
 
         try {
             propRec.setValue({ fieldId: PF.BANK_LINE_ID, value: String(line.id) });
@@ -165,22 +337,30 @@ define([
 
     // ── Proposal data fetchers ─────────────────────────────────────────────
 
-    function _getProposals(statusFilter) {
+    /**
+     * Fetch proposals filtered by status (and optionally bank account).
+     */
+    function _getProposals(statusFilter, bankAccountId) {
         var filters = [['isinactive', 'is', 'F']];
         if (statusFilter && statusFilter.length) {
             filters.push('AND');
             filters.push([PF.STATUS, 'anyof', statusFilter]);
         }
+        if (bankAccountId) {
+            filters.push('AND');
+            filters.push([PF.BANK_ACCT, 'anyof', bankAccountId]);
+        }
         var results = [];
         search.create({
-            type: C.RECORDS.PROPOSAL,
+            type:    C.RECORDS.PROPOSAL,
             filters: filters,
             columns: [
                 'internalid', 'created',
                 PF.TXN_TYPE, PF.NS_RECORD_REF,
                 PF.BANK_DATE, PF.BANK_AMOUNT, PF.BANK_REF,
                 PF.MATCH_AMOUNT, PF.STATUS, PF.NOTES,
-                PF.APPLIED_DATE, PF.ERROR_MSG, PF.APPLIED_TXN_ID
+                PF.APPLIED_DATE, PF.ERROR_MSG, PF.APPLIED_TXN_ID,
+                PF.HAS_VARIANCE, PF.VARIANCE_AMT
             ]
         }).run().each(function (row) {
             results.push({
@@ -196,7 +376,9 @@ define([
                 notes:        row.getValue(PF.NOTES),
                 appliedDate:  row.getValue(PF.APPLIED_DATE),
                 errorMsg:     row.getValue(PF.ERROR_MSG),
-                appliedTxnId: row.getValue(PF.APPLIED_TXN_ID)
+                appliedTxnId: row.getValue(PF.APPLIED_TXN_ID),
+                hasVariance:  row.getValue(PF.HAS_VARIANCE) === 'T',
+                varianceAmt:  parseFloat(row.getValue(PF.VARIANCE_AMT)) || 0
             });
             return results.length < 500;
         });
@@ -204,76 +386,31 @@ define([
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  Flash / Info helpers
+    //  Flash helper
     // ════════════════════════════════════════════════════════════════════════
 
     function _flashHtml(msg, color) {
         color = color || '#e8f5e9';
-        var border = color === '#e8f5e9' ? '#a5d6a7' : '#ef9a9a';
+        var border = (color === '#e8f5e9') ? '#a5d6a7' : '#ef9a9a';
         return '<div style="background:' + color + ';border:1px solid ' + border + ';' +
                'padding:10px 14px;border-radius:4px;margin-bottom:8px;font-size:13px;">' +
                msg + '</div>';
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  PAGE: Bank Match Central (main workspace)
+    //  VIEW 1: Global Overview (Master)
     // ════════════════════════════════════════════════════════════════════════
-    function _renderCentral(context, settings, params, flash) {
-        var form = ui.createForm({ title: 'Bank Match Central' });
+
+    function _renderOverview(context, flash) {
+        var form = ui.createForm({ title: 'Bank Match Central — All Accounts' });
         form.clientScriptModulePath = './BM_Dashboard_CS.js';
 
-        // ─ Header action buttons ───────────────────────────────────────────
-        form.addButton({
-            id:           'btn_run_automatch',
-            label:        'Run Auto-Match',
-            functionName: 'runAutoMatch'
-        });
-        form.addButton({
-            id:           'btn_approve_all',
-            label:        'Approve All Pending',
-            functionName: 'approveAll'
-        });
         form.addButton({
             id:           'btn_setup',
             label:        'Settings',
             functionName: 'goSetup'
         });
 
-        // Hidden action field (submitted with the "Approve Selected" form POST)
-        var hAction = form.addField({
-            id:   'custpage_action',
-            type: ui.FieldType.TEXT,
-            label: 'Action'
-        });
-        hAction.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
-        hAction.defaultValue = 'approve_proposals';
-
-        // ─ Filters ────────────────────────────────────────────────────────
-        form.addFieldGroup({ id: 'grp_filters', label: 'Filters' });
-
-        var fAcct = form.addField({
-            id:        'custpage_filter_account',
-            type:      ui.FieldType.SELECT,
-            label:     'Bank Account',
-            source:    'account',
-            container: 'grp_filters'
-        });
-        if (settings.bankAccount) fAcct.defaultValue = settings.bankAccount;
-
-        form.addField({
-            id:        'custpage_filter_from',
-            type:      ui.FieldType.DATE,
-            label:     'Date From',
-            container: 'grp_filters'
-        });
-        form.addField({
-            id:        'custpage_filter_to',
-            type:      ui.FieldType.DATE,
-            label:     'Date To',
-            container: 'grp_filters'
-        });
-
-        // ─ Flash / Status message ──────────────────────────────────────────
         if (flash) {
             var fld = form.addField({
                 id:    'custpage_flash',
@@ -283,29 +420,137 @@ define([
             fld.defaultValue = _flashHtml('&#10003;&nbsp;' + flash);
         }
 
-        // ─ Info banner ────────────────────────────────────────────────────
-        var infoBanner = form.addField({
+        // Info banner
+        var banner = form.addField({
             id:    'custpage_info',
             type:  ui.FieldType.INLINEHTML,
             label: ' '
         });
+        banner.defaultValue =
+            '<div style="background:#f3f4f6;border-left:4px solid #1565c0;' +
+            'padding:8px 14px;border-radius:4px;margin-bottom:4px;font-size:12px;">' +
+            '<strong>Global Overview</strong> — Select a bank account to open its matching workspace. ' +
+            'Counts reflect currently unmatched bank lines and pending approval proposals per account.' +
+            '</div>';
+
+        // ── Summary Sublist ────────────────────────────────────────────────
+        var sb = form.addSublist({
+            id:    'sl_overview',
+            type:  ui.SublistType.LIST,
+            label: 'Bank Accounts Summary'
+        });
+
+        sb.addField({ id: 'ov_subsidiary', type: ui.FieldType.TEXT,    label: 'Subsidiary' });
+        sb.addField({ id: 'ov_account',    type: ui.FieldType.TEXT,    label: 'Bank Account' });
+        sb.addField({ id: 'ov_unmatched',  type: ui.FieldType.INTEGER, label: 'Unmatched Lines' });
+        sb.addField({ id: 'ov_pending',    type: ui.FieldType.INTEGER, label: 'Pending Proposals' });
+        sb.addField({ id: 'ov_action',     type: ui.FieldType.URL,     label: 'Action' }).linkText = 'Go to Matching';
+
+        var bankAccounts = _getAllBankAccounts();
+        bankAccounts.forEach(function (acct, i) {
+            var unmatchedCount = _countUnmatchedLines(acct.id);
+            var pendingCount   = _countPendingProposals(acct.id);
+
+            sb.setSublistValue({ id: 'ov_subsidiary', line: i, value: acct.subsidiaryName });
+            sb.setSublistValue({ id: 'ov_account',    line: i, value: acct.name });
+            sb.setSublistValue({ id: 'ov_unmatched',  line: i, value: unmatchedCount === '?' ? 0 : unmatchedCount });
+            sb.setSublistValue({ id: 'ov_pending',    line: i, value: pendingCount });
+            sb.setSublistValue({ id: 'ov_action',     line: i, value: _slUrl({
+                bank_account: acct.id,
+                subsidiary:   acct.subsidiaryId || ''
+            }) });
+        });
+
+        context.response.writePage(form);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  VIEW 2: Matching Workspace (Detail)
+    // ════════════════════════════════════════════════════════════════════════
+
+    function _renderCentral(context, settings, params, flash) {
+        var bankAccountId = params.bank_account || settings.bankAccount;
+        var subsidiaryId  = params.subsidiary   || _getSubsidiaryForAccount(bankAccountId) || settings.subsidiary;
+
+        var form = ui.createForm({ title: 'Bank Match Central — Matching Workspace' });
+        form.clientScriptModulePath = './BM_Dashboard_CS.js';
+
+        // ─ Header buttons ──────────────────────────────────────────────────
+        form.addButton({ id: 'btn_overview',  label: '← All Accounts',   functionName: 'goOverview' });
+        form.addButton({ id: 'btn_run_automatch', label: 'Run Auto-Match', functionName: 'runAutoMatch' });
+        form.addButton({ id: 'btn_approve_all',   label: 'Approve All Pending', functionName: 'approveAll' });
+        form.addButton({ id: 'btn_setup',     label: 'Settings',         functionName: 'goSetup' });
+
+        // Hidden action field for proposal approval POST
+        var hAction = form.addField({ id: 'custpage_action', type: ui.FieldType.TEXT, label: 'Action' });
+        hAction.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
+        hAction.defaultValue = 'approve_proposals';
+
+        // ─ Filters ────────────────────────────────────────────────────────
+        form.addFieldGroup({ id: 'grp_filters', label: 'Filters' });
+
+        // Subsidiary selector — changing it reloads the page (client-side)
+        var fSub = form.addField({
+            id:        'custpage_filter_subsidiary',
+            type:      ui.FieldType.SELECT,
+            label:     'Subsidiary',
+            source:    'subsidiary',
+            container: 'grp_filters'
+        });
+        if (subsidiaryId) fSub.defaultValue = subsidiaryId;
+
+        // Bank Account selector — populated with accounts for the selected subsidiary
+        var bankAccounts = _getBankAccountsForSubsidiary(subsidiaryId);
+        var fAcct = form.addField({
+            id:        'custpage_filter_account',
+            type:      ui.FieldType.SELECT,
+            label:     'Bank Account',
+            container: 'grp_filters'
+        });
+        // Add blank option then each bank account for the subsidiary
+        fAcct.addSelectOption({ value: '', text: '— Select —' });
+        bankAccounts.forEach(function (a) {
+            fAcct.addSelectOption({ value: a.id, text: a.name });
+        });
+        if (bankAccountId) fAcct.defaultValue = bankAccountId;
+
+        form.addField({ id: 'custpage_filter_from', type: ui.FieldType.DATE, label: 'Date From', container: 'grp_filters' });
+        form.addField({ id: 'custpage_filter_to',   type: ui.FieldType.DATE, label: 'Date To',   container: 'grp_filters' });
+
+        // Hidden fields propagated on client-side navigation
+        var hBankAcct = form.addField({ id: 'custpage_h_bank_account', type: ui.FieldType.TEXT, label: 'Bank Account ID' });
+        hBankAcct.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
+        hBankAcct.defaultValue = String(bankAccountId || '');
+
+        var hSub = form.addField({ id: 'custpage_h_subsidiary', type: ui.FieldType.TEXT, label: 'Subsidiary ID' });
+        hSub.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
+        hSub.defaultValue = String(subsidiaryId || '');
+
+        // ─ Flash / Info ────────────────────────────────────────────────────
+        if (flash) {
+            var fld = form.addField({ id: 'custpage_flash', type: ui.FieldType.INLINEHTML, label: ' ' });
+            fld.defaultValue = _flashHtml('&#10003;&nbsp;' + flash);
+        }
+
+        var infoBanner = form.addField({ id: 'custpage_info', type: ui.FieldType.INLINEHTML, label: ' ' });
         infoBanner.defaultValue = [
             '<div style="background:#f3f4f6;border-left:4px solid #1565c0;',
             'padding:8px 14px;border-radius:4px;margin-bottom:4px;font-size:12px;line-height:1.7;">',
             '<strong>Workflow:</strong> ',
             '&#x2460; Click <strong>Run Auto-Match</strong> to propose matches for all unmatched bank lines. ',
-            '&#x2461; Review proposals below and click <strong>Approve All Pending</strong> or select individual ones. ',
-            '&#x2462; For lines with no auto-match, use the <strong>Manual Match →</strong> link in the Unmatched Lines tab. ',
-            '&#x2463; NetSuite&rsquo;s Reconciliation Rules automatically match the stamped transactions.',
+            '&#x2461; Review proposals and click <strong>Approve All Pending</strong> or select individually. ',
+            '&#x2462; For unmatched lines, use the <strong>Manual Match →</strong> link in the Unmatched Lines tab. ',
+            '&#x2463; NetSuite&rsquo;s Reconciliation Rules automatically reconcile stamped transactions. ',
+            '<br>&#9888;&nbsp;<em>Variance matches</em> (Tier 2b) are auto-approved with a fee write-off JE posted to the configured Bank Fee Account.',
             '</div>'
         ].join('');
 
         // ═══════════════════════════════════════════════════════════════════
-        //  Tab 1: Pending Proposals (INLINEEDITOR with Approve checkboxes)
+        //  Tab 1: Pending Proposals
         // ═══════════════════════════════════════════════════════════════════
         form.addTab({ id: 'tab_proposals', label: 'Pending Approvals' });
 
-        var pending = _getProposals([PS.PENDING]);
+        var pending = _getProposals([PS.PENDING], bankAccountId);
 
         var sbProp = form.addSublist({
             id:    'sl_proposals',
@@ -313,51 +558,43 @@ define([
             label: pending.length + ' proposal(s) pending approval',
             tab:   'tab_proposals'
         });
-        sbProp.addButton({
-            id:           'btn_mark_all',
-            label:        'Mark All',
-            functionName: 'markAllApprovals'
-        });
-        sbProp.addButton({
-            id:           'btn_unmark_all',
-            label:        'Clear All',
-            functionName: 'unmarkAllApprovals'
-        });
+        sbProp.addButton({ id: 'btn_mark_all',   label: 'Mark All',   functionName: 'markAllApprovals' });
+        sbProp.addButton({ id: 'btn_unmark_all', label: 'Clear All',  functionName: 'unmarkAllApprovals' });
 
-        // Editable checkbox column
         sbProp.addField({ id: 'slp_approve', type: ui.FieldType.CHECKBOX, label: 'Approve?' });
 
-        // Proposal ID (hidden — needed to identify which to approve on submit)
-        var slpIdFld = sbProp.addField({
-            id: 'slp_id', type: ui.FieldType.TEXT, label: 'ID'
-        });
-        slpIdFld.updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        sbProp.addField({ id: 'slp_id', type: ui.FieldType.TEXT, label: 'ID' })
+              .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
 
-        // Read-only display columns
-        sbProp.addField({ id: 'slp_date',   type: ui.FieldType.DATE,     label: 'Bank Date' })
+        sbProp.addField({ id: 'slp_date',     type: ui.FieldType.DATE,     label: 'Bank Date' })
               .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
-        sbProp.addField({ id: 'slp_amount', type: ui.FieldType.CURRENCY, label: 'Amount' })
+        sbProp.addField({ id: 'slp_amount',   type: ui.FieldType.CURRENCY, label: 'Amount' })
               .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
-        sbProp.addField({ id: 'slp_ref',    type: ui.FieldType.TEXT,     label: 'Bank Ref' })
+        sbProp.addField({ id: 'slp_ref',      type: ui.FieldType.TEXT,     label: 'Bank Ref' })
               .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
-        sbProp.addField({ id: 'slp_type',   type: ui.FieldType.TEXT,     label: 'Match Type' })
+        sbProp.addField({ id: 'slp_type',     type: ui.FieldType.TEXT,     label: 'Match Type' })
               .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
-        sbProp.addField({ id: 'slp_match',  type: ui.FieldType.TEXT,     label: 'Matched To' })
+        sbProp.addField({ id: 'slp_match',    type: ui.FieldType.TEXT,     label: 'Matched To' })
               .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
-        sbProp.addField({ id: 'slp_notes',  type: ui.FieldType.TEXT,     label: 'Notes' })
+        sbProp.addField({ id: 'slp_variance', type: ui.FieldType.TEXT,     label: 'Variance' })
               .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
-        sbProp.addField({ id: 'slp_view',   type: ui.FieldType.URL,      label: 'View' })
+        sbProp.addField({ id: 'slp_notes',    type: ui.FieldType.TEXT,     label: 'Notes' })
+              .updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        sbProp.addField({ id: 'slp_view',     type: ui.FieldType.URL,      label: 'View' })
               .linkText = 'Open';
 
         pending.forEach(function (p, i) {
+            var varianceLabel = p.hasVariance
+                ? '⚠ ' + (p.varianceAmt ? p.varianceAmt.toFixed(2) : '?')
+                : '';
             sbProp.setSublistValue({ id: 'slp_approve', line: i, value: 'F' });
             sbProp.setSublistValue({ id: 'slp_id',      line: i, value: p.id });
             sbProp.setSublistValue({ id: 'slp_date',    line: i, value: p.bankDate   || '' });
             sbProp.setSublistValue({ id: 'slp_amount',  line: i, value: p.bankAmount || 0 });
             sbProp.setSublistValue({ id: 'slp_ref',     line: i, value: p.bankRef    || '—' });
-            sbProp.setSublistValue({ id: 'slp_type',    line: i,
-                value: TYPE_LABELS[p.txnType] || '—' });
+            sbProp.setSublistValue({ id: 'slp_type',    line: i, value: TYPE_LABELS[p.txnType] || '—' });
             sbProp.setSublistValue({ id: 'slp_match',   line: i, value: p.nsRef      || '—' });
+            sbProp.setSublistValue({ id: 'slp_variance',line: i, value: varianceLabel });
             sbProp.setSublistValue({ id: 'slp_notes',   line: i, value: p.notes      || '' });
             sbProp.setSublistValue({ id: 'slp_view',    line: i,
                 value: '/app/common/custom/custrecordentry.nl?rectype=' +
@@ -369,11 +606,10 @@ define([
         // ═══════════════════════════════════════════════════════════════════
         form.addTab({ id: 'tab_unmatched', label: 'Unmatched Lines' });
 
-        var accountId = params.filter_account || settings.bankAccount;
-        var lineData  = reader.getUnmatchedLines(accountId);
+        var lineData  = reader.getUnmatchedLines(bankAccountId);
         var bankLines = lineData.lines;
 
-        // Optional date filter (applied after fetching all lines)
+        // Date filter (client-side post-fetch)
         var filterFrom = params.date_from ? new Date(params.date_from) : null;
         var filterTo   = params.date_to   ? new Date(params.date_to)   : null;
         if (filterFrom || filterTo) {
@@ -398,23 +634,23 @@ define([
         sbLines.addField({ id: 'ul_desc',   type: ui.FieldType.TEXT,     label: 'Description' });
         sbLines.addField({ id: 'ul_ref',    type: ui.FieldType.TEXT,     label: 'Reference' });
         sbLines.addField({ id: 'ul_source', type: ui.FieldType.TEXT,     label: 'Source' });
-        sbLines.addField({ id: 'ul_action', type: ui.FieldType.URL,      label: 'Action' })
-               .linkText = 'Manual Match';
+        sbLines.addField({ id: 'ul_action', type: ui.FieldType.URL,      label: 'Action' }).linkText = 'Manual Match';
 
         bankLines.forEach(function (line, i) {
             sbLines.setSublistValue({ id: 'ul_date',   line: i, value: line.date        || '' });
             sbLines.setSublistValue({ id: 'ul_amount', line: i, value: line.amount      || 0 });
-            sbLines.setSublistValue({ id: 'ul_desc',   line: i,
-                value: (line.description || '—').substring(0, 80) });
+            sbLines.setSublistValue({ id: 'ul_desc',   line: i, value: (line.description || '—').substring(0, 80) });
             sbLines.setSublistValue({ id: 'ul_ref',    line: i, value: line.reference   || '—' });
             sbLines.setSublistValue({ id: 'ul_source', line: i, value: line.source      || '—' });
             sbLines.setSublistValue({ id: 'ul_action', line: i, value: _slUrl({
-                action:   'match',
-                bankline: line.id,
-                bl_date:  line.date,
-                bl_amt:   line.amount,
-                bl_ref:   line.reference,
-                bl_desc:  line.description
+                action:       'match',
+                bank_account: bankAccountId,
+                subsidiary:   subsidiaryId || '',
+                bankline:     line.id,
+                bl_date:      line.date,
+                bl_amt:       line.amount,
+                bl_ref:       line.reference,
+                bl_desc:      line.description
             }) });
         });
 
@@ -423,7 +659,7 @@ define([
         // ═══════════════════════════════════════════════════════════════════
         form.addTab({ id: 'tab_history', label: 'History' });
 
-        var history = _getProposals([PS.APPLIED, PS.REJECTED, PS.FAILED]);
+        var history = _getProposals([PS.APPLIED, PS.REJECTED, PS.FAILED], bankAccountId);
         var sbHist  = form.addSublist({
             id:    'sl_history',
             type:  ui.SublistType.LIST,
@@ -442,18 +678,15 @@ define([
         sbHist.addField({ id: 'hh_error',   type: ui.FieldType.TEXT,     label: 'Error' });
 
         history.forEach(function (p, i) {
-            sbHist.setSublistValue({ id: 'hh_status',  line: i,
-                value: STATUS_LABELS[p.status] || p.status || '—' });
-            sbHist.setSublistValue({ id: 'hh_type',    line: i,
-                value: TYPE_LABELS[p.txnType] || '—' });
+            sbHist.setSublistValue({ id: 'hh_status',  line: i, value: STATUS_LABELS[p.status] || p.status || '—' });
+            sbHist.setSublistValue({ id: 'hh_type',    line: i, value: TYPE_LABELS[p.txnType]  || '—' });
             sbHist.setSublistValue({ id: 'hh_date',    line: i, value: p.bankDate     || '' });
             sbHist.setSublistValue({ id: 'hh_amount',  line: i, value: p.bankAmount   || 0 });
             sbHist.setSublistValue({ id: 'hh_ref',     line: i, value: p.bankRef      || '—' });
             sbHist.setSublistValue({ id: 'hh_match',   line: i, value: p.nsRef        || '—' });
             sbHist.setSublistValue({ id: 'hh_applied', line: i, value: p.appliedDate  || '' });
             sbHist.setSublistValue({ id: 'hh_nstxn',   line: i, value: p.appliedTxnId || '' });
-            sbHist.setSublistValue({ id: 'hh_error',   line: i,
-                value: (p.errorMsg || '').substring(0, 100) });
+            sbHist.setSublistValue({ id: 'hh_error',   line: i, value: (p.errorMsg || '').substring(0, 100) });
         });
 
         form.addSubmitButton({ label: 'Approve Selected Proposals' });
@@ -461,17 +694,27 @@ define([
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  ACTION: Run Auto-Match (GET)
+    //  ACTION: Run Auto-Match (waterfall engine)
     // ════════════════════════════════════════════════════════════════════════
+
     function _handleRunAutoMatch(context, settings, params) {
-        var accountId  = params.account    || settings.bankAccount;
-        var filterFrom = params.date_from  ? new Date(params.date_from) : null;
-        var filterTo   = params.date_to    ? new Date(params.date_to)   : null;
+        var bankAccountId = params.bank_account || params.account || settings.bankAccount;
+        var subsidiaryId  = params.subsidiary   || _getSubsidiaryForAccount(bankAccountId) || settings.subsidiary;
+        var filterFrom    = params.date_from ? new Date(params.date_from) : null;
+        var filterTo      = params.date_to   ? new Date(params.date_to)   : null;
 
-        var lineData  = reader.getUnmatchedLines(accountId);
-        var allLines  = lineData.lines;
+        // Build per-account settings (subsidiary override for this account)
+        var runSettings = {
+            toleranceAmt:  settings.toleranceAmt,
+            toleranceDays: settings.toleranceDays,
+            subsidiary:    subsidiaryId || settings.subsidiary,
+            feeAccount:    settings.feeAccount,
+            approver:      settings.approver
+        };
 
-        // Apply date filters
+        var lineData = reader.getUnmatchedLines(bankAccountId);
+        var allLines = lineData.lines;
+
         if (filterFrom || filterTo) {
             allLines = allLines.filter(function (line) {
                 if (!line.date) return true;
@@ -489,15 +732,13 @@ define([
             var key = _idempotencyKey(line);
             if (_proposalExists(key)) { skipped++; return; }
 
-            var isCredit   = parseFloat(line.amount) > 0;
-            var candidates = isCredit
-                ? engine.findInvoiceMatches(line, settings)
-                : engine.findVendorBillMatches(line, settings);
+            // Run waterfall match (Tiers 1 / 2a / 2b / 3)
+            var matchResult = engine.runWaterfallMatch(line, runSettings);
 
-            if (!candidates.length || candidates[0].score < 40) { skipped++; return; }
+            if (!matchResult) { skipped++; return; }
 
             try {
-                _createProposalRecord(line, candidates[0], settings, key);
+                _createProposalRecord(line, matchResult, runSettings, key, bankAccountId);
                 created++;
             } catch (e) {
                 log.error('BM_Main_SL.run_automatch', e.message);
@@ -506,20 +747,22 @@ define([
         });
 
         log.audit('BM_Main_SL.run_automatch',
-            'Processed ' + allLines.length + ' lines: ' + created +
-            ' proposals created, ' + skipped + ' skipped.');
+            'Bank account ' + bankAccountId + ': processed ' + allLines.length + ' lines — ' +
+            created + ' proposals created, ' + skipped + ' skipped.');
 
         _redirect(context,
-            created + ' proposal(s) created from ' + allLines.length +
-            ' bank line(s). ' + skipped + ' skipped.' +
-            (created > 0 ? ' Review them in the Pending Approvals tab.' : ''));
+            created + ' proposal(s) created from ' + allLines.length + ' bank line(s). ' +
+            skipped + ' skipped.' +
+            (created > 0 ? ' Review them in the Pending Approvals tab.' : ''),
+            bankAccountId);
     }
 
     // ════════════════════════════════════════════════════════════════════════
     //  ACTION: Approve ALL pending (GET)
     // ════════════════════════════════════════════════════════════════════════
-    function _handleApproveAll(context, settings) {
-        var pending  = _getProposals([PS.PENDING]);
+
+    function _handleApproveAll(context, params, bankAccountId) {
+        var pending  = _getProposals([PS.PENDING], bankAccountId);
         var approved = 0;
         var failed   = 0;
 
@@ -540,26 +783,25 @@ define([
 
         _redirect(context,
             approved + ' proposal(s) approved' +
-            (failed > 0 ? ', ' + failed + ' failed' : '') + '. ' +
-            'NetSuite transactions are being created and will be ready to reconcile shortly.');
+            (failed > 0 ? ', ' + failed + ' failed' : '') +
+            '. NetSuite transactions are being created.',
+            bankAccountId);
     }
 
     // ════════════════════════════════════════════════════════════════════════
     //  ACTION: Approve SELECTED proposals (POST)
     // ════════════════════════════════════════════════════════════════════════
+
     function _handleApproveProposals(context) {
         var req      = context.request;
         var approved = 0;
         var failed   = 0;
+        var bankAcct = req.parameters.custpage_h_bank_account || '';
 
         var lineCount = req.getLineCount({ group: 'sl_proposals' });
         for (var i = 0; i < lineCount; i++) {
-            var isChecked = req.getSublistValue({
-                group: 'sl_proposals', name: 'slp_approve', line: i
-            });
-            var propId = req.getSublistValue({
-                group: 'sl_proposals', name: 'slp_id', line: i
-            });
+            var isChecked = req.getSublistValue({ group: 'sl_proposals', name: 'slp_approve', line: i });
+            var propId    = req.getSublistValue({ group: 'sl_proposals', name: 'slp_id',      line: i });
 
             if ((isChecked === 'T' || isChecked === true) && propId) {
                 try {
@@ -571,8 +813,7 @@ define([
                     });
                     approved++;
                 } catch (e) {
-                    log.error('BM_Main_SL.approve_proposals',
-                        'Proposal ' + propId + ': ' + e.message);
+                    log.error('BM_Main_SL.approve_proposals', 'Proposal ' + propId + ': ' + e.message);
                     failed++;
                 }
             }
@@ -583,13 +824,18 @@ define([
                 ? approved + ' proposal(s) approved' +
                   (failed > 0 ? ', ' + failed + ' failed' : '') +
                   '. NetSuite transactions are being created.'
-                : 'No proposals were selected. Check the Approve? box before submitting.');
+                : 'No proposals selected. Check the Approve? box before submitting.',
+            bankAcct);
     }
 
     // ════════════════════════════════════════════════════════════════════════
     //  PAGE: Manual Match (one bank line, 3 options)
     // ════════════════════════════════════════════════════════════════════════
+
     function _renderMatchPage(context, settings, params) {
+        var bankAccountId = params.bank_account || settings.bankAccount;
+        var subsidiaryId  = params.subsidiary   || _getSubsidiaryForAccount(bankAccountId) || settings.subsidiary;
+
         var bankLine = {
             id:          params.bankline || '',
             date:        params.bl_date  || '',
@@ -597,44 +843,39 @@ define([
             reference:   params.bl_ref   || '',
             description: params.bl_desc  || ''
         };
-        var isCredit  = bankLine.amount > 0;
-        var amtColor  = isCredit ? '#2e7d32' : '#c62828';
-        var amtSign   = isCredit ? '+' : '';
+        var isCredit = bankLine.amount > 0;
+        var amtColor = isCredit ? '#2e7d32' : '#c62828';
+        var amtSign  = isCredit ? '+' : '';
 
         var form = ui.createForm({
-            title: 'Manual Match — ' +
-                   (bankLine.reference || bankLine.description || 'Bank Line')
+            title: 'Manual Match — ' + (bankLine.reference || bankLine.description || 'Bank Line')
         });
         form.clientScriptModulePath = './BM_Dashboard_CS.js';
-        form.addButton({ id: 'btn_back', label: '← Back to Central', functionName: 'goBack' });
+        form.addButton({ id: 'btn_back', label: '← Back', functionName: 'goBack' });
 
-        // ─ Bank line summary ─────────────────────────────────────────────
+        // Bank line summary
         form.addFieldGroup({ id: 'grp_bl', label: 'Bank Line' });
-        var blHtml = form.addField({
-            id: 'custpage_bl_html', type: ui.FieldType.INLINEHTML,
-            label: ' ', container: 'grp_bl'
-        });
+        var blHtml = form.addField({ id: 'custpage_bl_html', type: ui.FieldType.INLINEHTML, label: ' ', container: 'grp_bl' });
         blHtml.defaultValue = [
             '<table style="font-size:13px;line-height:2;width:50%;">',
-            '<tr><td style="width:120px;font-weight:600;color:#555;">Date</td>',
-            '<td>' + (bankLine.date || '—') + '</td></tr>',
-            '<tr><td style="font-weight:600;color:#555;">Amount</td>',
-            '<td><strong style="font-size:15px;color:' + amtColor + ';">',
-            amtSign + bankLine.amount.toFixed(2) + '</strong></td></tr>',
-            '<tr><td style="font-weight:600;color:#555;">Reference</td>',
-            '<td>' + (bankLine.reference || '—') + '</td></tr>',
-            '<tr><td style="font-weight:600;color:#555;">Description</td>',
-            '<td>' + (bankLine.description || '—') + '</td></tr>',
+            '<tr><td style="width:120px;font-weight:600;color:#555;">Date</td><td>',      (bankLine.date || '—'),     '</td></tr>',
+            '<tr><td style="font-weight:600;color:#555;">Amount</td><td>',
+            '<strong style="font-size:15px;color:' + amtColor + ';">',
+            amtSign + bankLine.amount.toFixed(2), '</strong></td></tr>',
+            '<tr><td style="font-weight:600;color:#555;">Reference</td><td>', (bankLine.reference   || '—'), '</td></tr>',
+            '<tr><td style="font-weight:600;color:#555;">Description</td><td>', (bankLine.description || '—'), '</td></tr>',
             '</table>'
         ].join('');
 
-        // ─ Hidden context fields ─────────────────────────────────────────
+        // Hidden context fields
         var hidden = {
-            custpage_h_bankline: bankLine.id,
-            custpage_h_bl_date:  bankLine.date,
-            custpage_h_bl_amt:   bankLine.amount,
-            custpage_h_bl_ref:   bankLine.reference,
-            custpage_h_bl_desc:  bankLine.description
+            custpage_h_bankline:     bankLine.id,
+            custpage_h_bl_date:      bankLine.date,
+            custpage_h_bl_amt:       bankLine.amount,
+            custpage_h_bl_ref:       bankLine.reference,
+            custpage_h_bl_desc:      bankLine.description,
+            custpage_h_bank_account: bankAccountId || '',
+            custpage_h_subsidiary:   subsidiaryId  || ''
         };
         Object.keys(hidden).forEach(function (fid) {
             var f = form.addField({ id: fid, type: ui.FieldType.TEXT, label: fid });
@@ -642,18 +883,21 @@ define([
             f.defaultValue = String(hidden[fid] || '');
         });
 
-        // ─ Auto-suggested matches ────────────────────────────────────────
+        // Auto-suggested matches (legacy score-based for display)
+        var matchSettings = {
+            toleranceAmt:  settings.toleranceAmt,
+            toleranceDays: settings.toleranceDays,
+            subsidiary:    subsidiaryId || settings.subsidiary
+        };
         var candidates = isCredit
-            ? engine.findInvoiceMatches(bankLine, settings)
-            : engine.findVendorBillMatches(bankLine, settings);
+            ? engine.findInvoiceMatches(bankLine, matchSettings)
+            : engine.findVendorBillMatches(bankLine, matchSettings);
 
         var topCands = candidates.filter(function (c) { return c.score >= 40; });
-
         if (topCands.length) {
             var suggLabel = isCredit ? 'Suggested Invoices' : 'Suggested Vendor Bills';
             var sb = form.addSublist({
-                id:   'sl_suggest',
-                type: ui.SublistType.LIST,
+                id: 'sl_suggest', type: ui.SublistType.LIST,
                 label: topCands.length + ' auto-suggested match(es) — click Select to use'
             });
             sb.addField({ id: 'sg_score',  type: ui.FieldType.INTEGER,  label: 'Score' });
@@ -661,8 +905,7 @@ define([
             sb.addField({ id: 'sg_ref',    type: ui.FieldType.TEXT,     label: suggLabel });
             sb.addField({ id: 'sg_date',   type: ui.FieldType.DATE,     label: 'Date' });
             sb.addField({ id: 'sg_amount', type: ui.FieldType.CURRENCY, label: 'Amount' });
-            sb.addField({ id: 'sg_select', type: ui.FieldType.URL,      label: 'Action' })
-              .linkText = 'Select';
+            sb.addField({ id: 'sg_select', type: ui.FieldType.URL,      label: 'Action' }).linkText = 'Select';
 
             topCands.slice(0, 10).forEach(function (cand, i) {
                 sb.setSublistValue({ id: 'sg_score',  line: i, value: cand.score });
@@ -671,83 +914,42 @@ define([
                 sb.setSublistValue({ id: 'sg_date',   line: i, value: cand.date });
                 sb.setSublistValue({ id: 'sg_amount', line: i, value: cand.amount });
                 sb.setSublistValue({ id: 'sg_select', line: i, value: _slUrl({
-                    action:   'create_manual',
-                    txn_type: cand.type,
-                    ns_id:    cand.nsId,
-                    bankline: bankLine.id,
-                    bl_date:  bankLine.date,
-                    bl_amt:   bankLine.amount,
-                    bl_ref:   bankLine.reference,
-                    bl_desc:  bankLine.description
+                    action:       'create_manual',
+                    txn_type:     cand.type,
+                    ns_id:        cand.nsId,
+                    bank_account: bankAccountId,
+                    subsidiary:   subsidiaryId || '',
+                    bankline:     bankLine.id,
+                    bl_date:      bankLine.date,
+                    bl_amt:       bankLine.amount,
+                    bl_ref:       bankLine.reference,
+                    bl_desc:      bankLine.description
                 }) });
             });
         }
 
-        // ─ Option A: Customer Invoice → Customer Payment ─────────────────
-        form.addFieldGroup({
-            id:    'grp_option_a',
-            label: 'Option A — Customer Invoice → Customer Payment'
-        });
-        form.addField({
-            id:        'custpage_entity_a',
-            type:      ui.FieldType.SELECT,
-            label:     'Customer',
-            source:    'customer',
-            container: 'grp_option_a'
-        });
-        form.addButton({
-            id:           'btn_find_invoices',
-            label:        'Find Open Invoices →',
-            functionName: 'findInvoices'
-        });
+        // Option A: Customer Invoice → Customer Payment
+        form.addFieldGroup({ id: 'grp_option_a', label: 'Option A — Customer Invoice → Customer Payment' });
+        form.addField({ id: 'custpage_entity_a', type: ui.FieldType.SELECT, label: 'Customer', source: 'customer', container: 'grp_option_a' });
+        form.addButton({ id: 'btn_find_invoices', label: 'Find Open Invoices →', functionName: 'findInvoices' });
 
-        // ─ Option B: Vendor Bill → Vendor Payment ────────────────────────
-        form.addFieldGroup({
-            id:    'grp_option_b',
-            label: 'Option B — Vendor Bill → Vendor Payment'
-        });
-        form.addField({
-            id:        'custpage_entity_b',
-            type:      ui.FieldType.SELECT,
-            label:     'Vendor',
-            source:    'vendor',
-            container: 'grp_option_b'
-        });
-        form.addButton({
-            id:           'btn_find_bills',
-            label:        'Find Open Bills →',
-            functionName: 'findBills'
-        });
+        // Option B: Vendor Bill → Vendor Payment
+        form.addFieldGroup({ id: 'grp_option_b', label: 'Option B — Vendor Bill → Vendor Payment' });
+        form.addField({ id: 'custpage_entity_b', type: ui.FieldType.SELECT, label: 'Vendor', source: 'vendor', container: 'grp_option_b' });
+        form.addButton({ id: 'btn_find_bills', label: 'Find Open Bills →', functionName: 'findBills' });
 
-        // ─ Option C: GL Account → Journal Entry ──────────────────────────
-        form.addFieldGroup({
-            id:    'grp_option_c',
-            label: 'Option C — GL Account → Journal Entry (bank fees, etc.)'
-        });
-        form.addField({
-            id:        'custpage_gl_account',
-            type:      ui.FieldType.SELECT,
-            label:     'GL Account',
-            source:    'account',
-            container: 'grp_option_c'
-        });
-        form.addField({
-            id:        'custpage_gl_memo',
-            type:      ui.FieldType.TEXT,
-            label:     'Memo (optional)',
-            container: 'grp_option_c'
-        });
+        // Option C: GL Account → Journal Entry
+        // Pre-fill with suspense account if configured
+        form.addFieldGroup({ id: 'grp_option_c', label: 'Option C — GL Account → Journal Entry (bank fees, unknowns)' });
+        var fGlAcct = form.addField({ id: 'custpage_gl_account', type: ui.FieldType.SELECT, label: 'GL Account', source: 'account', container: 'grp_option_c' });
+        if (settings.suspenseAccount) fGlAcct.defaultValue = settings.suspenseAccount;
+        form.addField({ id: 'custpage_gl_memo', type: ui.FieldType.TEXT, label: 'Memo (optional)', container: 'grp_option_c' });
 
-        // Hidden: action + txn_type (for Option C POST)
-        var hAct = form.addField({
-            id: 'custpage_action_c', type: ui.FieldType.TEXT, label: 'Action'
-        });
+        var hAct  = form.addField({ id: 'custpage_action_c', type: ui.FieldType.TEXT, label: 'Action' });
         hAct.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
         hAct.defaultValue = 'create_manual';
 
-        var hType = form.addField({
-            id: 'custpage_txn_type', type: ui.FieldType.TEXT, label: 'Type'
-        });
+        var hType = form.addField({ id: 'custpage_txn_type', type: ui.FieldType.TEXT, label: 'Type' });
         hType.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
         hType.defaultValue = String(TT.JOURNAL_ENTRY);
 
@@ -758,40 +960,39 @@ define([
     // ════════════════════════════════════════════════════════════════════════
     //  PAGE: Open Invoices for a Customer (Option A entity picker)
     // ════════════════════════════════════════════════════════════════════════
+
     function _renderEntityInvoicesPage(context, settings, params) {
-        var customerId = params.entity_id || '';
-        var bankLine   = {
-            id:        params.bankline || '',
-            date:      params.bl_date  || '',
-            amount:    parseFloat(params.bl_amt  || 0),
-            reference: params.bl_ref   || '',
-            description: params.bl_desc || ''
+        var customerId    = params.entity_id  || '';
+        var bankAccountId = params.bank_account || settings.bankAccount;
+        var subsidiaryId  = params.subsidiary  || _getSubsidiaryForAccount(bankAccountId) || settings.subsidiary;
+        var bankLine      = {
+            id:          params.bankline || '',
+            date:        params.bl_date  || '',
+            amount:      parseFloat(params.bl_amt  || 0),
+            reference:   params.bl_ref   || '',
+            description: params.bl_desc  || ''
         };
 
         if (!customerId) {
-            _redirect(context, 'No customer selected. Please choose a customer first.');
+            _redirect(context, 'No customer selected.', bankAccountId);
             return;
         }
 
         var entityName = customerId;
         try {
-            var lf = search.lookupFields({
-                type: 'customer', id: customerId,
-                columns: ['companyname', 'entityid']
-            });
+            var lf = search.lookupFields({ type: 'customer', id: customerId, columns: ['companyname', 'entityid'] });
             entityName = lf.companyname || lf.entityid || customerId;
         } catch (e) { /* keep raw ID */ }
 
-        var invoices = engine.findOpenInvoicesByCustomer(customerId);
+        // Pass subsidiary so invoices are filtered cross-subsidiary safely
+        var invoices = engine.findOpenInvoicesByCustomer(customerId, subsidiaryId || settings.subsidiary);
 
         var form = ui.createForm({ title: 'Open Invoices — ' + entityName });
         form.clientScriptModulePath = './BM_Dashboard_CS.js';
         form.addButton({ id: 'btn_back', label: '← Back', functionName: 'goBack' });
 
-        var bannerFld = form.addField({
-            id: 'custpage_em_banner', type: ui.FieldType.INLINEHTML, label: ' '
-        });
-        bannerFld.defaultValue = [
+        var banner = form.addField({ id: 'custpage_em_banner', type: ui.FieldType.INLINEHTML, label: ' ' });
+        banner.defaultValue = [
             '<div style="background:#f5f5f5;border-left:4px solid #1565c0;',
             'padding:8px 14px;border-radius:4px;font-size:12px;">',
             '<strong>Bank Line:</strong> ', (bankLine.date || '—'), ' &nbsp; ',
@@ -802,18 +1003,16 @@ define([
         ].join('');
 
         var sb = form.addSublist({
-            id:    'sl_invoices',
-            type:  ui.SublistType.LIST,
+            id: 'sl_invoices', type: ui.SublistType.LIST,
             label: (invoices.length || 'No') + ' open invoice(s) — click Select to create a Customer Payment'
         });
-
-        sb.addField({ id: 'inv_ref',     type: ui.FieldType.TEXT,     label: 'Invoice #' });
-        sb.addField({ id: 'inv_date',    type: ui.FieldType.DATE,     label: 'Invoice Date' });
-        sb.addField({ id: 'inv_due',     type: ui.FieldType.DATE,     label: 'Due Date' });
-        sb.addField({ id: 'inv_total',   type: ui.FieldType.CURRENCY, label: 'Invoice Total' });
-        sb.addField({ id: 'inv_remain',  type: ui.FieldType.CURRENCY, label: 'Amount Remaining' });
-        sb.addField({ id: 'inv_memo',    type: ui.FieldType.TEXT,     label: 'Memo' });
-        sb.addField({ id: 'inv_select',  type: ui.FieldType.URL,      label: 'Action' }).linkText = 'Select';
+        sb.addField({ id: 'inv_ref',    type: ui.FieldType.TEXT,     label: 'Invoice #' });
+        sb.addField({ id: 'inv_date',   type: ui.FieldType.DATE,     label: 'Invoice Date' });
+        sb.addField({ id: 'inv_due',    type: ui.FieldType.DATE,     label: 'Due Date' });
+        sb.addField({ id: 'inv_total',  type: ui.FieldType.CURRENCY, label: 'Invoice Total' });
+        sb.addField({ id: 'inv_remain', type: ui.FieldType.CURRENCY, label: 'Amount Remaining' });
+        sb.addField({ id: 'inv_memo',   type: ui.FieldType.TEXT,     label: 'Memo' });
+        sb.addField({ id: 'inv_select', type: ui.FieldType.URL,      label: 'Action' }).linkText = 'Select';
 
         invoices.forEach(function (inv, i) {
             sb.setSublistValue({ id: 'inv_ref',    line: i, value: inv.reference  || '—' });
@@ -823,14 +1022,16 @@ define([
             sb.setSublistValue({ id: 'inv_remain', line: i, value: inv.amount     || 0 });
             sb.setSublistValue({ id: 'inv_memo',   line: i, value: inv.memo       || '—' });
             sb.setSublistValue({ id: 'inv_select', line: i, value: _slUrl({
-                action:   'create_manual',
-                txn_type: TT.CUSTOMER_PAYMENT,
-                ns_id:    inv.nsId,
-                bankline: bankLine.id,
-                bl_date:  bankLine.date,
-                bl_amt:   bankLine.amount,
-                bl_ref:   bankLine.reference,
-                bl_desc:  bankLine.description
+                action:       'create_manual',
+                txn_type:     TT.CUSTOMER_PAYMENT,
+                ns_id:        inv.nsId,
+                bank_account: bankAccountId,
+                subsidiary:   subsidiaryId || '',
+                bankline:     bankLine.id,
+                bl_date:      bankLine.date,
+                bl_amt:       bankLine.amount,
+                bl_ref:       bankLine.reference,
+                bl_desc:      bankLine.description
             }) });
         });
 
@@ -840,9 +1041,12 @@ define([
     // ════════════════════════════════════════════════════════════════════════
     //  PAGE: Open Bills for a Vendor (Option B entity picker)
     // ════════════════════════════════════════════════════════════════════════
+
     function _renderEntityBillsPage(context, settings, params) {
-        var vendorId = params.entity_id || '';
-        var bankLine = {
+        var vendorId      = params.entity_id  || '';
+        var bankAccountId = params.bank_account || settings.bankAccount;
+        var subsidiaryId  = params.subsidiary  || _getSubsidiaryForAccount(bankAccountId) || settings.subsidiary;
+        var bankLine      = {
             id:          params.bankline || '',
             date:        params.bl_date  || '',
             amount:      parseFloat(params.bl_amt  || 0),
@@ -851,29 +1055,25 @@ define([
         };
 
         if (!vendorId) {
-            _redirect(context, 'No vendor selected. Please choose a vendor first.');
+            _redirect(context, 'No vendor selected.', bankAccountId);
             return;
         }
 
         var vendorName = vendorId;
         try {
-            var lf = search.lookupFields({
-                type: 'vendor', id: vendorId,
-                columns: ['companyname', 'entityid']
-            });
+            var lf = search.lookupFields({ type: 'vendor', id: vendorId, columns: ['companyname', 'entityid'] });
             vendorName = lf.companyname || lf.entityid || vendorId;
         } catch (e) { /* keep raw ID */ }
 
-        var bills = engine.findOpenBillsByVendor(vendorId);
+        // Pass subsidiary to prevent cross-subsidiary bill matching
+        var bills = engine.findOpenBillsByVendor(vendorId, subsidiaryId || settings.subsidiary);
 
         var form = ui.createForm({ title: 'Open Bills — ' + vendorName });
         form.clientScriptModulePath = './BM_Dashboard_CS.js';
         form.addButton({ id: 'btn_back', label: '← Back', functionName: 'goBack' });
 
-        var bannerFld = form.addField({
-            id: 'custpage_em_banner', type: ui.FieldType.INLINEHTML, label: ' '
-        });
-        bannerFld.defaultValue = [
+        var banner = form.addField({ id: 'custpage_em_banner', type: ui.FieldType.INLINEHTML, label: ' ' });
+        banner.defaultValue = [
             '<div style="background:#f5f5f5;border-left:4px solid #c62828;',
             'padding:8px 14px;border-radius:4px;font-size:12px;">',
             '<strong>Bank Line:</strong> ', (bankLine.date || '—'), ' &nbsp; ',
@@ -884,11 +1084,9 @@ define([
         ].join('');
 
         var sb = form.addSublist({
-            id:    'sl_bills',
-            type:  ui.SublistType.LIST,
+            id: 'sl_bills', type: ui.SublistType.LIST,
             label: (bills.length || 'No') + ' open bill(s) — click Select to create a Vendor Payment'
         });
-
         sb.addField({ id: 'bill_ref',    type: ui.FieldType.TEXT,     label: 'Bill #' });
         sb.addField({ id: 'bill_date',   type: ui.FieldType.DATE,     label: 'Bill Date' });
         sb.addField({ id: 'bill_due',    type: ui.FieldType.DATE,     label: 'Due Date' });
@@ -905,14 +1103,16 @@ define([
             sb.setSublistValue({ id: 'bill_remain', line: i, value: bill.amount     || 0 });
             sb.setSublistValue({ id: 'bill_memo',   line: i, value: bill.memo       || '—' });
             sb.setSublistValue({ id: 'bill_select', line: i, value: _slUrl({
-                action:   'create_manual',
-                txn_type: TT.VENDOR_PAYMENT,
-                ns_id:    bill.nsId,
-                bankline: bankLine.id,
-                bl_date:  bankLine.date,
-                bl_amt:   bankLine.amount,
-                bl_ref:   bankLine.reference,
-                bl_desc:  bankLine.description
+                action:       'create_manual',
+                txn_type:     TT.VENDOR_PAYMENT,
+                ns_id:        bill.nsId,
+                bank_account: bankAccountId,
+                subsidiary:   subsidiaryId || '',
+                bankline:     bankLine.id,
+                bl_date:      bankLine.date,
+                bl_amt:       bankLine.amount,
+                bl_ref:       bankLine.reference,
+                bl_desc:      bankLine.description
             }) });
         });
 
@@ -920,57 +1120,55 @@ define([
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  ACTION: Create Manual Match — Customer Payment / Vendor Payment /
-    //          Journal Entry — stamps custbody_bank_transaction_id
+    //  ACTION: Create Manual Match (Customer Payment / Vendor Payment / JE)
     // ════════════════════════════════════════════════════════════════════════
+
     function _handleCreateManual(context, settings, params) {
-        // Params can come from GET (Options A & B select links) or POST (Option C form)
-        var txnType  = params.txn_type          || params.custpage_txn_type   || '';
-        var nsId     = params.ns_id             || params.custpage_gl_account || '';
-        var bankline = params.bankline          || params.custpage_h_bankline  || '';
-        var bankDate = params.bl_date           || params.custpage_h_bl_date   || '';
-        var bankAmt  = parseFloat(
-            params.bl_amt  || params.custpage_h_bl_amt  || 0);
-        var bankRef  = params.bl_ref            || params.custpage_h_bl_ref    || '';
-        var bankDesc = params.bl_desc           || params.custpage_h_bl_desc   || '';
-        var memo     = params.custpage_gl_memo  || '';
+        var txnType       = params.txn_type          || params.custpage_txn_type   || '';
+        var nsId          = params.ns_id             || params.custpage_gl_account || '';
+        var bankAccountId = params.bank_account      || params.custpage_h_bank_account || settings.bankAccount;
+        var bankline      = params.bankline          || params.custpage_h_bankline  || '';
+        var bankDate      = params.bl_date           || params.custpage_h_bl_date   || '';
+        var bankAmt       = parseFloat(params.bl_amt  || params.custpage_h_bl_amt  || 0);
+        var bankRef       = params.bl_ref            || params.custpage_h_bl_ref    || '';
+        var bankDesc      = params.bl_desc           || params.custpage_h_bl_desc   || '';
+        var memo          = params.custpage_gl_memo  || '';
 
         if (!nsId) {
-            _redirect(context, 'No target record selected. Please select an Invoice, ' +
-                'Vendor Bill, or GL Account before submitting.');
+            _redirect(context,
+                'No target record selected. Please select an Invoice, Vendor Bill, or GL Account.',
+                bankAccountId);
             return;
         }
 
-        // Normalized bank ref — written to custbody_bank_transaction_id
         var normRef = C.normalizeTxnId(bankRef || bankDesc);
-
         var proposal = {
-            nsId:       nsId,
-            bankAmount: bankAmt,
-            bankDate:   bankDate,
-            bankRef:    bankRef || bankDesc || memo,
-            notes:      memo
+            nsId:        nsId,
+            bankAmount:  bankAmt,
+            bankDate:    bankDate,
+            bankRef:     bankRef || bankDesc || memo,
+            notes:       memo,
+            hasVariance: false,
+            varianceAmt: 0
         };
 
-        var appliedId      = null;
-        var txnRecordType  = null;
+        var appliedId     = null;
+        var txnRecordType = null;
 
         try {
             if (String(txnType) === String(TT.CUSTOMER_PAYMENT)) {
-                appliedId     = engine.applyCustomerPayment(proposal);
+                appliedId     = engine.applyCustomerPayment(proposal, settings);
                 txnRecordType = record.Type.CUSTOMER_PAYMENT;
 
             } else if (String(txnType) === String(TT.VENDOR_PAYMENT)) {
-                appliedId     = engine.applyVendorPayment(proposal);
+                appliedId     = engine.applyVendorPayment(proposal, settings);
                 txnRecordType = record.Type.VENDOR_PAYMENT;
 
             } else if (String(txnType) === String(TT.JOURNAL_ENTRY)) {
-                if (!settings.bankAccount) {
-                    throw new Error(
-                        'Bank GL account is not configured in Bank Match Settings.'
-                    );
+                if (!bankAccountId) {
+                    throw new Error('Bank GL account is not configured in Bank Match Settings.');
                 }
-                appliedId     = engine.applyJournalEntry(proposal, settings.bankAccount);
+                appliedId     = engine.applyJournalEntry(proposal, bankAccountId);
                 txnRecordType = record.Type.JOURNAL_ENTRY;
 
             } else {
@@ -988,80 +1186,93 @@ define([
             }
 
             log.audit('BM_Main_SL.create_manual',
-                TYPE_LABELS[txnType] + ' ' + appliedId +
-                ' created for bank line ' + bankline);
+                TYPE_LABELS[txnType] + ' ' + appliedId + ' created for bank line ' + bankline);
 
             _redirect(context,
                 TYPE_LABELS[txnType] + ' created (ID: ' + appliedId + '). ' +
-                'The bank transaction ID has been stamped. ' +
-                'Run NetSuite\'s Reconciliation Rules to finalize the match.');
+                'Bank transaction ID stamped. Run NetSuite Reconciliation Rules to finalize.',
+                bankAccountId);
 
         } catch (e) {
             log.error('BM_Main_SL.create_manual', e.message);
-            _redirect(context, 'Error creating transaction: ' + e.message);
+            _redirect(context,
+                'ERROR creating ' + (TYPE_LABELS[txnType] || 'transaction') + ': ' + e.message,
+                bankAccountId);
         }
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  Entry point
+    //  ENTRY POINT
     // ════════════════════════════════════════════════════════════════════════
+
     function onRequest(context) {
-        var req      = context.request;
-        var params   = req.parameters;
-        var action   = params.action || '';
-        var settings = _getSettings();
+        var req    = context.request;
+        var params = req.parameters;
+        var action = params.action || '';
 
-        if (!settings) {
-            context.response.sendRedirect({
-                type:       'SUITELET',
-                identifier: C.SCRIPTS.SETUP_SL,
-                id:         C.SCRIPTS.SETUP_DEPLOY
-            });
-            return;
-        }
-
-        // ── POST handlers ─────────────────────────────────────────────────
+        // ── POST ────────────────────────────────────────────────────────────
         if (req.method === 'POST') {
-            var postAction = params.custpage_action || params.action || '';
-            if (postAction === 'approve_proposals') {
-                _handleApproveProposals(context);
-            } else if (postAction === 'create_manual') {
-                _handleCreateManual(context, settings, params);
+            var postAction = params.custpage_action || params.custpage_action_c || '';
+            if (postAction === 'create_manual') {
+                var settings0 = _getSettings() || {};
+                _handleCreateManual(context, settings0, params);
             } else {
-                _redirect(context, 'Unknown form action.');
+                _handleApproveProposals(context);
             }
             return;
         }
 
-        // ── GET handlers ──────────────────────────────────────────────────
-        if (action === 'run_automatch') {
-            _handleRunAutoMatch(context, settings, params);
-            return;
-        }
-        if (action === 'approve_all') {
-            _handleApproveAll(context, settings);
-            return;
-        }
-        if (action === 'create_manual') {
-            _handleCreateManual(context, settings, params);
-            return;
-        }
-        if (action === 'match') {
-            _renderMatchPage(context, settings, params);
-            return;
-        }
-        if (action === 'entity_invoices' || action === 'entity_match') {
-            _renderEntityInvoicesPage(context, settings, params);
-            return;
-        }
-        if (action === 'entity_bills') {
-            _renderEntityBillsPage(context, settings, params);
+        // ── GET ─────────────────────────────────────────────────────────────
+        var flash         = params.flash ? decodeURIComponent(params.flash) : '';
+        var bankAccountId = params.bank_account || '';
+
+        // No bank_account → show Global Overview (Master)
+        if (!bankAccountId && action !== 'run_automatch' && action !== 'approve_all') {
+            _renderOverview(context, flash);
             return;
         }
 
-        // Default: main central workspace
-        var flash = params.flash ? decodeURIComponent(params.flash) : null;
-        _renderCentral(context, settings, params, flash);
+        var settings = _getSettings();
+        if (!settings) {
+            // Redirect to setup if never configured
+            context.response.sendRedirect({
+                type:       'SUITELET',
+                identifier: C.SCRIPTS.SETUP_SL,
+                id:         C.SCRIPTS.SETUP_DEPLOY,
+                parameters: {}
+            });
+            return;
+        }
+
+        switch (action) {
+            case 'run_automatch':
+                _handleRunAutoMatch(context, settings, params);
+                break;
+
+            case 'approve_all':
+                _handleApproveAll(context, params, bankAccountId);
+                break;
+
+            case 'match':
+                _renderMatchPage(context, settings, params);
+                break;
+
+            case 'entity_invoices':
+                _renderEntityInvoicesPage(context, settings, params);
+                break;
+
+            case 'entity_bills':
+                _renderEntityBillsPage(context, settings, params);
+                break;
+
+            case 'create_manual':
+                _handleCreateManual(context, settings, params);
+                break;
+
+            default:
+                // Show workspace (Detail) for the given bank account
+                _renderCentral(context, settings, params, flash);
+        }
     }
 
     return { onRequest: onRequest };

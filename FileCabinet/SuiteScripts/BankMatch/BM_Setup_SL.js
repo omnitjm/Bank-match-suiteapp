@@ -27,22 +27,25 @@ define([
 
     // ── Load (or create) the single settings record ────────────────────────
     function _loadSettings() {
+        var SF     = C.SETTINGS_FIELDS;
         var result = search.create({
-            type: C.RECORDS.SETTINGS,
+            type:    C.RECORDS.SETTINGS,
             filters: [['isinactive', 'is', 'F']],
-            columns: Object.values(C.SETTINGS_FIELDS)
+            columns: Object.values(SF)
         }).run().getRange({ start: 0, end: 1 });
 
         if (result && result.length > 0) {
             var row = result[0];
             return {
-                id:          row.id,
-                bankAccount: row.getValue(C.SETTINGS_FIELDS.BANK_ACCOUNT),
-                subsidiary:  row.getValue(C.SETTINGS_FIELDS.SUBSIDIARY),
-                tolAmt:      row.getValue(C.SETTINGS_FIELDS.TOLERANCE_AMT),
-                tolDays:     row.getValue(C.SETTINGS_FIELDS.TOLERANCE_DAYS),
-                approver:    row.getValue(C.SETTINGS_FIELDS.APPROVER),
-                autoSuggest: row.getValue(C.SETTINGS_FIELDS.AUTO_SUGGEST)
+                id:              row.id,
+                bankAccount:     row.getValue(SF.BANK_ACCOUNT),
+                subsidiary:      row.getValue(SF.SUBSIDIARY),
+                tolAmt:          row.getValue(SF.TOLERANCE_AMT),
+                tolDays:         row.getValue(SF.TOLERANCE_DAYS),
+                approver:        row.getValue(SF.APPROVER),
+                autoSuggest:     row.getValue(SF.AUTO_SUGGEST),
+                feeAccount:      row.getValue(SF.FEE_ACCOUNT),
+                suspenseAccount: row.getValue(SF.SUSPENSE_ACCOUNT)
             };
         }
         return null;
@@ -146,18 +149,61 @@ define([
         });
         fldApprover.isMandatory = true;
 
+        // ─ Advanced: GL Accounts for variance write-off & suspense ──────────
+        var grpGL = form.addFieldGroup({
+            id:    'grp_gl',
+            label: 'Advanced — GL Account Defaults'
+        });
+
+        var glNote = form.addField({
+            id:        'custpage_gl_note',
+            type:      ui.FieldType.INLINEHTML,
+            label:     ' ',
+            container: 'grp_gl'
+        });
+        glNote.defaultValue =
+            '<div style="padding:6px 0;color:#555;font-size:12px;">' +
+            '&#9432;&nbsp; <strong>Bank Fee Account</strong> is used to post the difference when ' +
+            'an auto-match is accepted with a tolerance variance. ' +
+            '<strong>Suspense Account</strong> is pre-filled in the Manual Match UI for ' +
+            'unidentified bank lines.' +
+            '</div>';
+
+        var fldFeeAcct = form.addField({
+            id:        C.SETTINGS_FIELDS.FEE_ACCOUNT,
+            type:      ui.FieldType.SELECT,
+            label:     'Default Bank Fee Account',
+            source:    'account',
+            container: 'grp_gl'
+        });
+        fldFeeAcct.helpText = 'GL expense account for variance write-offs on tolerance matches.';
+
+        var fldSuspenseAcct = form.addField({
+            id:        C.SETTINGS_FIELDS.SUSPENSE_ACCOUNT,
+            type:      ui.FieldType.SELECT,
+            label:     'Default Suspense Account',
+            source:    'account',
+            container: 'grp_gl'
+        });
+        fldSuspenseAcct.helpText = 'Quick-select default GL account shown in Manual Match for unknown transactions.';
+
         // ─ Set current values if settings exist ─────────────────────────────
         if (settings) {
             form.addField({ id: 'custpage_settings_id', type: ui.FieldType.TEXT, label: 'Settings ID' })
                 .updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN })
                 .defaultValue = settings.id;
 
-            fldAccount.defaultValue    = settings.bankAccount;
-            fldSub.defaultValue        = settings.subsidiary;
-            fldTolAmt.defaultValue     = settings.tolAmt || '0.01';
-            fldTolDays.defaultValue    = settings.tolDays || '5';
-            fldApprover.defaultValue   = settings.approver;
-            fldAutoSuggest.defaultValue = settings.autoSuggest === 'T' ? 'T' : 'F';
+            fldAccount.defaultValue      = settings.bankAccount;
+            fldSub.defaultValue          = settings.subsidiary;
+            fldTolAmt.defaultValue       = settings.tolAmt     || '50.00';
+            fldTolDays.defaultValue      = settings.tolDays    || '5';
+            fldApprover.defaultValue     = settings.approver;
+            fldAutoSuggest.defaultValue  = settings.autoSuggest === 'T' ? 'T' : 'F';
+            fldFeeAcct.defaultValue      = settings.feeAccount      || '';
+            fldSuspenseAcct.defaultValue = settings.suspenseAccount || '';
+        } else {
+            fldTolAmt.defaultValue  = '50.00';
+            fldTolDays.defaultValue = '5';
         }
 
         form.addSubmitButton({ label: 'Save Settings' });
@@ -166,14 +212,17 @@ define([
 
     // ── Save settings from POST ───────────────────────────────────────────
     function _saveSettings(params) {
+        var SF         = C.SETTINGS_FIELDS;
         var settingsId = params.custpage_settings_id;
         var values = {};
-        values[C.SETTINGS_FIELDS.BANK_ACCOUNT]   = params[C.SETTINGS_FIELDS.BANK_ACCOUNT];
-        values[C.SETTINGS_FIELDS.SUBSIDIARY]      = params[C.SETTINGS_FIELDS.SUBSIDIARY] || '';
-        values[C.SETTINGS_FIELDS.TOLERANCE_AMT]   = params[C.SETTINGS_FIELDS.TOLERANCE_AMT];
-        values[C.SETTINGS_FIELDS.TOLERANCE_DAYS]  = params[C.SETTINGS_FIELDS.TOLERANCE_DAYS];
-        values[C.SETTINGS_FIELDS.APPROVER]        = params[C.SETTINGS_FIELDS.APPROVER];
-        values[C.SETTINGS_FIELDS.AUTO_SUGGEST]    = params[C.SETTINGS_FIELDS.AUTO_SUGGEST] || 'F';
+        values[SF.BANK_ACCOUNT]      = params[SF.BANK_ACCOUNT];
+        values[SF.SUBSIDIARY]        = params[SF.SUBSIDIARY]       || '';
+        values[SF.TOLERANCE_AMT]     = params[SF.TOLERANCE_AMT];
+        values[SF.TOLERANCE_DAYS]    = params[SF.TOLERANCE_DAYS];
+        values[SF.APPROVER]          = params[SF.APPROVER];
+        values[SF.AUTO_SUGGEST]      = params[SF.AUTO_SUGGEST]     || 'F';
+        values[SF.FEE_ACCOUNT]       = params[SF.FEE_ACCOUNT]      || '';
+        values[SF.SUSPENSE_ACCOUNT]  = params[SF.SUSPENSE_ACCOUNT] || '';
 
         if (settingsId) {
             record.submitFields({
