@@ -17,7 +17,7 @@
       <isdeployed>T</isdeployed>
       <isinactive>F</isinactive>
       <loglevel>DEBUG</loglevel>
-      <recordtype>customrecord_bm_proposal</recordtype>
+      <recordtype>[scriptid=customrecord_bm_proposal]</recordtype>
       <runasrole>ADMINISTRATOR</runasrole>
       <status>RELEASED</status>
       <title>BM Proposal – Execute on Approval</title>

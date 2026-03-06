@@ -61,7 +61,7 @@
     <customrecordcustomfield scriptid="custrecord_bm_txn_status">
       <fieldtype>SELECT</fieldtype>
       <label>Status</label>
-      <selectrecordtype>customlist_bm_txn_status</selectrecordtype>
+      <selectrecordtype>[scriptid=customlist_bm_txn_status]</selectrecordtype>
       <ismandatory>T</ismandatory>
       <defaultvalue>1</defaultvalue>
       <showinlist>T</showinlist>

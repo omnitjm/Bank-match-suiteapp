@@ -20,6 +20,7 @@
       <allroles>T</allroles>
       <eventtype></eventtype>
       <isdeployed>T</isdeployed>
+      <recordtype>bankstatementmatch</recordtype>
       <isinactive>F</isinactive>
       <loglevel>ERROR</loglevel>
       <status>RELEASED</status>
