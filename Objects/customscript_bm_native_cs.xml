@@ -8,7 +8,7 @@
   <notifygroup></notifygroup>
   <notifyowner>T</notifyowner>
   <scriptfile>[/SuiteScripts/BankMatch/BM_NativePage_CS.js]</scriptfile>
-  <deploymentmodels>
+  <scriptdeployments>
     <scriptdeployment scriptid="customdeploy_bm_native_cs">
       <!--
         Deployed globally so the pageInit function can detect when the user
@@ -25,5 +25,5 @@
       <status>RELEASED</status>
       <title>BM Native Page Enhancement</title>
     </scriptdeployment>
-  </deploymentmodels>
+  </scriptdeployments>
 </clientscript>

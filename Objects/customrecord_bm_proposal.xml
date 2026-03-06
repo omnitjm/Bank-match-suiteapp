@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <customrecordtype scriptid="customrecord_bm_proposal">
-  <accesstype>USERROLE</accesstype>
+  <accesstype>CUSTRECORDENTRYPERM</accesstype>
   <allowattachments>F</allowattachments>
   <allowinlinedeleting>F</allowinlinedeleting>
   <allowinlineediting>F</allowinlineediting>
@@ -10,7 +10,7 @@
   <enablemailmerge>F</enablemailmerge>
   <enablenotes>T</enablenotes>
   <enablenumbering>F</enablenumbering>
-  <fields>
+  <customrecordcustomfields>
 
     <!-- ── Bank transaction link ────────────────────────────── -->
     <customrecordcustomfield scriptid="custrecord_bm_prop_bank_txn">
@@ -273,8 +273,7 @@
       <helptext>The GL bank account this proposal belongs to. Populated automatically from the active bank account context when the proposal is created. Used by the Global Overview to count proposals per account.</helptext>
     </customrecordcustomfield>
 
-  </fields>
-  <hierarchytype>NONE</hierarchytype>
+  </customrecordcustomfields>
   <isinactive>F</isinactive>
   <isordered>F</isordered>
   <name>BM Match Proposal</name>
@@ -282,5 +281,4 @@
   <showcreationdate>T</showcreationdate>
   <showlastmodified>T</showlastmodified>
   <showowner>T</showowner>
-  <showpermissions>F</showpermissions>
 </customrecordtype>

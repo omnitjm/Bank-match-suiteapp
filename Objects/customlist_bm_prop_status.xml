@@ -1,27 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <customlist scriptid="customlist_bm_prop_status">
-  <custvalues>
-    <custvalue scriptid="customvalue_bm_prop_status_1">
+  <customvalues>
+    <customvalue scriptid="customvalue_bm_prop_status_1">
       <isinactive>F</isinactive>
       <value>Pending Approval</value>
-    </custvalue>
-    <custvalue scriptid="customvalue_bm_prop_status_2">
+    </customvalue>
+    <customvalue scriptid="customvalue_bm_prop_status_2">
       <isinactive>F</isinactive>
       <value>Approved</value>
-    </custvalue>
-    <custvalue scriptid="customvalue_bm_prop_status_3">
+    </customvalue>
+    <customvalue scriptid="customvalue_bm_prop_status_3">
       <isinactive>F</isinactive>
       <value>Rejected</value>
-    </custvalue>
-    <custvalue scriptid="customvalue_bm_prop_status_4">
+    </customvalue>
+    <customvalue scriptid="customvalue_bm_prop_status_4">
       <isinactive>F</isinactive>
       <value>Applied</value>
-    </custvalue>
-    <custvalue scriptid="customvalue_bm_prop_status_5">
+    </customvalue>
+    <customvalue scriptid="customvalue_bm_prop_status_5">
       <isinactive>F</isinactive>
       <value>Failed</value>
-    </custvalue>
-  </custvalues>
+    </customvalue>
+  </customvalues>
   <description>Status values for Bank Match reconciliation proposals</description>
   <isordered>F</isordered>
   <name>BM Proposal Status</name>

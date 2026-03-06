@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <customrecordtype scriptid="customrecord_bm_settings">
-  <accesstype>USERROLE</accesstype>
+  <accesstype>CUSTRECORDENTRYPERM</accesstype>
   <allowattachments>F</allowattachments>
   <allowinlinedeleting>F</allowinlinedeleting>
   <allowinlineediting>T</allowinlineediting>
@@ -8,9 +8,8 @@
   <allowuiaccess>T</allowuiaccess>
   <enablekeywords>F</enablekeywords>
   <enablemailmerge>F</enablemailmerge>
-  <enablenotes>F</enablenotes>
   <enablenumbering>F</enablenumbering>
-  <fields>
+  <customrecordcustomfields>
 
     <customrecordcustomfield scriptid="custrecord_bm_bank_account">
       <fieldtype>SELECT</fieldtype>
@@ -137,8 +136,7 @@
       <helptext>Default location applied to all Journal Entry lines created by Bank Match. Required when Location is a mandatory segment in your NetSuite account.</helptext>
     </customrecordcustomfield>
 
-  </fields>
-  <hierarchytype>NONE</hierarchytype>
+  </customrecordcustomfields>
   <isinactive>F</isinactive>
   <isordered>F</isordered>
   <name>BM App Settings</name>
@@ -146,5 +144,4 @@
   <showcreationdate>F</showcreationdate>
   <showlastmodified>T</showlastmodified>
   <showowner>F</showowner>
-  <showpermissions>F</showpermissions>
 </customrecordtype>

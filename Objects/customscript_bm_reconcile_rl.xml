@@ -8,7 +8,7 @@
   <notifygroup></notifygroup>
   <notifyowner>T</notifyowner>
   <scriptfile>[/SuiteScripts/BankMatch/BM_Reconcile_RL.js]</scriptfile>
-  <deploymentmodels>
+  <scriptdeployments>
     <scriptdeployment scriptid="customdeploy_bm_reconcile_rl">
       <allemployees>F</allemployees>
       <allpartners>F</allpartners>
@@ -21,5 +21,5 @@
       <status>RELEASED</status>
       <title>BM Reconcile RESTlet</title>
     </scriptdeployment>
-  </deploymentmodels>
+  </scriptdeployments>
 </restlet>

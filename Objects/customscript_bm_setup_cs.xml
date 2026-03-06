@@ -8,7 +8,7 @@
   <notifygroup></notifygroup>
   <notifyowner>T</notifyowner>
   <scriptfile>[/SuiteScripts/BankMatch/BM_Setup_CS.js]</scriptfile>
-  <deploymentmodels>
+  <scriptdeployments>
     <scriptdeployment scriptid="customdeploy_bm_setup_cs">
       <allemployees>F</allemployees>
       <allpartners>F</allpartners>
@@ -20,5 +20,5 @@
       <status>RELEASED</status>
       <title>BM Setup CS</title>
     </scriptdeployment>
-  </deploymentmodels>
+  </scriptdeployments>
 </clientscript>
