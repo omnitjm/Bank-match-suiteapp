@@ -1,19 +1,14 @@
 {
   "name": "bank-match-automation-suite",
   "version": "1.0.0",
-  "description": "Automates NetSuite Match Bank Data module: auto-matching, posting, reconciliation with multi-agent orchestration",
+  "description": "Automates NetSuite Match Bank Data module: auto-matching, posting, reconciliation",
   "scripts": {
     "deploy": "suitecloud project:deploy",
     "deploy:no-prompt": "suitecloud project:deploy --no-preview",
     "validate": "suitecloud project:validate",
-    "lint": "eslint FileCabinet/SuiteScripts/BankMatch/**/*.js",
-    "setup": "suitecloud account:setup --authid bank-match-auth"
+    "setup": "suitecloud account:setup"
   },
   "devDependencies": {
-    "@oracle/suitecloud-cli": "^1.8.0",
-    "eslint": "^8.0.0",
-    "@oracle/eslint-config-netsuite": "^1.0.0"
-  },
-  "suiteCloudVersion": "1.0",
-  "defaultAuthId": "bank-match-auth"
+    "eslint": "^8.0.0"
+  }
 }

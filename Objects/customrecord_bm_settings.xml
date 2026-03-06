@@ -1,16 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <customrecordtype scriptid="customrecord_bm_settings">
-  <accesstype>USERROLE</accesstype>
+  <accesstype>CUSTRECORDENTRYPERM</accesstype>
   <allowattachments>F</allowattachments>
   <allowinlinedeleting>F</allowinlinedeleting>
   <allowinlineediting>T</allowinlineediting>
   <allowquickadd>F</allowquickadd>
   <allowuiaccess>T</allowuiaccess>
   <enablekeywords>F</enablekeywords>
-  <enablemailmerge>F</enablemailmerge>
-  <enablenotes>F</enablenotes>
   <enablenumbering>F</enablenumbering>
-  <fields>
+  <customrecordcustomfields>
 
     <customrecordcustomfield scriptid="custrecord_bm_bank_account">
       <fieldtype>SELECT</fieldtype>
@@ -20,7 +18,6 @@
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>The GL bank account used for reconciliation.</helptext>
     </customrecordcustomfield>
 
     <customrecordcustomfield scriptid="custrecord_bm_subsidiary">
@@ -31,7 +28,6 @@
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Limit matching to this subsidiary. Leave blank for all subsidiaries.</helptext>
     </customrecordcustomfield>
 
     <customrecordcustomfield scriptid="custrecord_bm_tolerance_amt">
@@ -42,7 +38,6 @@
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Maximum allowed amount difference when auto-matching.</helptext>
     </customrecordcustomfield>
 
     <customrecordcustomfield scriptid="custrecord_bm_tolerance_days">
@@ -53,7 +48,6 @@
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Maximum number of days between bank date and NetSuite date for auto-matching.</helptext>
     </customrecordcustomfield>
 
     <customrecordcustomfield scriptid="custrecord_bm_approver">
@@ -64,7 +58,6 @@
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Employee who must approve all reconciliation proposals before they are applied.</helptext>
     </customrecordcustomfield>
 
     <customrecordcustomfield scriptid="custrecord_bm_auto_suggest">
@@ -75,10 +68,7 @@
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>When enabled, the best match candidate is automatically proposed when bank lines are imported (still requires approval).</helptext>
     </customrecordcustomfield>
-
-    <!-- ── Advanced Matching & Posting Settings ──────────────────────────── -->
 
     <customrecordcustomfield scriptid="custrecord_bm_fee_account">
       <fieldtype>SELECT</fieldtype>
@@ -88,7 +78,6 @@
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>GL expense account used to post the variance difference when a payment is created with an amount tolerance gap (Match with Variance).</helptext>
     </customrecordcustomfield>
 
     <customrecordcustomfield scriptid="custrecord_bm_suspense_account">
@@ -99,10 +88,7 @@
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>GL suspense account used as a quick-select default in the Manual Matching UI for unknown or unidentified transactions.</helptext>
     </customrecordcustomfield>
-
-    <!-- ── Mandatory Segment Defaults (applied to all Journal Entry lines) ─── -->
 
     <customrecordcustomfield scriptid="custrecord_bm_default_department">
       <fieldtype>SELECT</fieldtype>
@@ -112,7 +98,6 @@
       <showinlist>F</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Default department applied to all Journal Entry lines created by Bank Match. Required when Department is a mandatory segment in your NetSuite account.</helptext>
     </customrecordcustomfield>
 
     <customrecordcustomfield scriptid="custrecord_bm_default_class">
@@ -123,7 +108,6 @@
       <showinlist>F</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Default class (classification) applied to all Journal Entry lines created by Bank Match. Required when Class is a mandatory segment in your NetSuite account.</helptext>
     </customrecordcustomfield>
 
     <customrecordcustomfield scriptid="custrecord_bm_default_location">
@@ -134,17 +118,13 @@
       <showinlist>F</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Default location applied to all Journal Entry lines created by Bank Match. Required when Location is a mandatory segment in your NetSuite account.</helptext>
     </customrecordcustomfield>
 
-  </fields>
-  <hierarchytype>NONE</hierarchytype>
+  </customrecordcustomfields>
   <isinactive>F</isinactive>
   <isordered>F</isordered>
-  <name>BM App Settings</name>
   <recordname>Settings</recordname>
   <showcreationdate>F</showcreationdate>
   <showlastmodified>T</showlastmodified>
   <showowner>F</showowner>
-  <showpermissions>F</showpermissions>
 </customrecordtype>

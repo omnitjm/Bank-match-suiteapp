@@ -4,21 +4,14 @@
  * SuiteCloud CLI configuration for Bank Match SuiteApp.
  *
  * One-time setup:
- *   npm install
- *   npx suitecloud account:setup --authid bank-match-auth
+ *   npm install -g @oracle/suitecloud-cli
+ *   suitecloud account:setup
  *
  * Deploy:
- *   npm run deploy            (validate + deploy)
- *   npm run deploy:no-prompt  (skip confirmation prompt — safe for CI)
- *   npm run validate          (dry-run, no changes made)
+ *   suitecloud project:deploy
+ *   suitecloud project:validate   (dry-run, no changes made)
  */
 module.exports = {
-    commands: {
-        'project:deploy': {
-            authid: 'bank-match-auth'
-        },
-        'project:validate': {
-            authid: 'bank-match-auth'
-        }
-    }
+    defaultProjectFolder: '',
+    commands: {}
 };

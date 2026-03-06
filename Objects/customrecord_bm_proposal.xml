@@ -1,40 +1,35 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <customrecordtype scriptid="customrecord_bm_proposal">
-  <accesstype>USERROLE</accesstype>
+  <accesstype>CUSTRECORDENTRYPERM</accesstype>
   <allowattachments>F</allowattachments>
   <allowinlinedeleting>F</allowinlinedeleting>
   <allowinlineediting>F</allowinlineediting>
   <allowquickadd>F</allowquickadd>
   <allowuiaccess>T</allowuiaccess>
   <enablekeywords>T</enablekeywords>
-  <enablemailmerge>F</enablemailmerge>
-  <enablenotes>T</enablenotes>
   <enablenumbering>F</enablenumbering>
-  <fields>
+  <customrecordcustomfields>
 
-    <!-- ── Bank transaction link ────────────────────────────── -->
     <customrecordcustomfield scriptid="custrecord_bm_prop_bank_txn">
       <fieldtype>SELECT</fieldtype>
       <label>Bank Transaction</label>
-      <selectrecordtype>customrecord_bm_bank_txn</selectrecordtype>
+      <selectrecordtype>[scriptid=customrecord_bm_bank_txn]</selectrecordtype>
       <ismandatory>T</ismandatory>
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
     </customrecordcustomfield>
 
-    <!-- ── Transaction type (Customer Payment / Bill Payment) ─ -->
     <customrecordcustomfield scriptid="custrecord_bm_prop_txn_type">
       <fieldtype>SELECT</fieldtype>
       <label>Transaction Type</label>
-      <selectrecordtype>customlist_bm_txn_type</selectrecordtype>
+      <selectrecordtype>[scriptid=customlist_bm_txn_type]</selectrecordtype>
       <ismandatory>T</ismandatory>
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
     </customrecordcustomfield>
 
-    <!-- ── NetSuite record details ──────────────────────────── -->
     <customrecordcustomfield scriptid="custrecord_bm_prop_ns_type">
       <fieldtype>TEXT</fieldtype>
       <label>NS Record Type</label>
@@ -42,7 +37,6 @@
       <showinlist>F</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Internal NetSuite record type string (e.g. invoice, vendorpayment).</helptext>
     </customrecordcustomfield>
 
     <customrecordcustomfield scriptid="custrecord_bm_prop_ns_id">
@@ -81,7 +75,6 @@
       <encryptatrest>F</encryptatrest>
     </customrecordcustomfield>
 
-    <!-- ── Bank transaction snapshot ───────────────────────── -->
     <customrecordcustomfield scriptid="custrecord_bm_prop_bank_amt">
       <fieldtype>CURRENCY</fieldtype>
       <label>Bank Amount</label>
@@ -109,17 +102,15 @@
       <encryptatrest>F</encryptatrest>
     </customrecordcustomfield>
 
-    <!-- ── Approval & result ────────────────────────────────── -->
     <customrecordcustomfield scriptid="custrecord_bm_prop_status">
       <fieldtype>SELECT</fieldtype>
       <label>Status</label>
-      <selectrecordtype>customlist_bm_prop_status</selectrecordtype>
+      <selectrecordtype>[scriptid=customlist_bm_prop_status]</selectrecordtype>
       <ismandatory>T</ismandatory>
       <defaultvalue>1</defaultvalue>
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Change to Approved to execute the reconciliation. Change to Rejected to decline.</helptext>
     </customrecordcustomfield>
 
     <customrecordcustomfield scriptid="custrecord_bm_prop_approver">
@@ -132,7 +123,6 @@
       <encryptatrest>F</encryptatrest>
     </customrecordcustomfield>
 
-    <!-- ── Bill Payment date adjustment ────────────────────── -->
     <customrecordcustomfield scriptid="custrecord_bm_prop_adj_date">
       <fieldtype>CHECKBOX</fieldtype>
       <label>Adjust Payment Date in NetSuite</label>
@@ -141,10 +131,8 @@
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>When checked (Bill Payment only), the Vendor Payment trandate will be updated to match the Bank Date on approval.</helptext>
     </customrecordcustomfield>
 
-    <!-- ── Notes & result tracking ──────────────────────────── -->
     <customrecordcustomfield scriptid="custrecord_bm_prop_notes">
       <fieldtype>TEXTAREA</fieldtype>
       <label>Notes</label>
@@ -172,7 +160,6 @@
       <encryptatrest>F</encryptatrest>
     </customrecordcustomfield>
 
-    <!-- ── Native bank line reference ──────────────────────────────────── -->
     <customrecordcustomfield scriptid="custrecord_bm_prop_bank_line">
       <fieldtype>TEXT</fieldtype>
       <label>Native Bank Line ID</label>
@@ -180,10 +167,8 @@
       <showinlist>F</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Internal ID of the bank statement line from NetSuite's native Match Bank Data module.</helptext>
     </customrecordcustomfield>
 
-    <!-- ── Idempotency key ──────────────────────────────────────────────── -->
     <customrecordcustomfield scriptid="custrecord_bm_idempotency_key">
       <fieldtype>TEXT</fieldtype>
       <label>Idempotency Key</label>
@@ -191,10 +176,8 @@
       <showinlist>F</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Deduplication key: bankLineId or date|amount|ref composite. Prevents duplicate proposals for the same bank line.</helptext>
     </customrecordcustomfield>
 
-    <!-- ── Apply locking & result tracking ─────────────────────────────── -->
     <customrecordcustomfield scriptid="custrecord_bm_apply_status">
       <fieldtype>TEXT</fieldtype>
       <label>Apply Status</label>
@@ -203,7 +186,6 @@
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Internal apply-execution status: Pending | Processing | Applied | Failed. Do not edit manually.</helptext>
     </customrecordcustomfield>
 
     <customrecordcustomfield scriptid="custrecord_bm_apply_attempts">
@@ -214,7 +196,6 @@
       <showinlist>F</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Number of times the apply logic has been executed for this proposal.</helptext>
     </customrecordcustomfield>
 
     <customrecordcustomfield scriptid="custrecord_bm_apply_error">
@@ -224,7 +205,6 @@
       <showinlist>F</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Last error message from the apply execution. Populated when Apply Status is Failed.</helptext>
     </customrecordcustomfield>
 
     <customrecordcustomfield scriptid="custrecord_bm_applied_txn_id">
@@ -234,10 +214,7 @@
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Internal ID of the NetSuite transaction created or updated when this proposal was applied.</helptext>
     </customrecordcustomfield>
-
-    <!-- ── Variance / Tolerance metadata ──────────────────────────────────── -->
 
     <customrecordcustomfield scriptid="custrecord_bm_prop_has_variance">
       <fieldtype>CHECKBOX</fieldtype>
@@ -247,7 +224,6 @@
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Checked when the auto-match found a strong document-number reference but the bank amount differs from the open balance by up to the configured tolerance. The variance will be posted to the Bank Fee Account on approval.</helptext>
     </customrecordcustomfield>
 
     <customrecordcustomfield scriptid="custrecord_bm_prop_variance_amt">
@@ -257,10 +233,7 @@
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>Absolute difference between the bank amount and the NetSuite open balance when a Match with Variance is detected. Posted to the Default Bank Fee Account on approval.</helptext>
     </customrecordcustomfield>
-
-    <!-- ── Bank Account link (for multi-account filtering) ────────────────── -->
 
     <customrecordcustomfield scriptid="custrecord_bm_prop_bank_acct">
       <fieldtype>SELECT</fieldtype>
@@ -270,17 +243,13 @@
       <showinlist>T</showinlist>
       <isformula>F</isformula>
       <encryptatrest>F</encryptatrest>
-      <helptext>The GL bank account this proposal belongs to. Populated automatically from the active bank account context when the proposal is created. Used by the Global Overview to count proposals per account.</helptext>
     </customrecordcustomfield>
 
-  </fields>
-  <hierarchytype>NONE</hierarchytype>
+  </customrecordcustomfields>
   <isinactive>F</isinactive>
   <isordered>F</isordered>
-  <name>BM Match Proposal</name>
   <recordname>Match Proposal</recordname>
   <showcreationdate>T</showcreationdate>
   <showlastmodified>T</showlastmodified>
   <showowner>T</showowner>
-  <showpermissions>F</showpermissions>
 </customrecordtype>

@@ -8,22 +8,4 @@
   <notifygroup></notifygroup>
   <notifyowner>T</notifyowner>
   <scriptfile>[/SuiteScripts/BankMatch/BM_NativePage_CS.js]</scriptfile>
-  <deploymentmodels>
-    <scriptdeployment scriptid="customdeploy_bm_native_cs">
-      <!--
-        Deployed globally so the pageInit function can detect when the user
-        is on the Match Bank Data page and inject our button bar.
-        The script exits immediately on any other page (URL check).
-      -->
-      <allemployees>T</allemployees>
-      <allpartners>F</allpartners>
-      <allroles>T</allroles>
-      <eventtype></eventtype>
-      <isdeployed>T</isdeployed>
-      <isinactive>F</isinactive>
-      <loglevel>ERROR</loglevel>
-      <status>RELEASED</status>
-      <title>BM Native Page Enhancement</title>
-    </scriptdeployment>
-  </deploymentmodels>
 </clientscript>
