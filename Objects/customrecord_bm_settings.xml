@@ -136,6 +136,19 @@
       <helptext>Default location applied to all Journal Entry lines created by Bank Match. Required when Location is a mandatory segment in your NetSuite account.</helptext>
     </customrecordcustomfield>
 
+    <!-- ── Scheduled auto-match time (informational display only) ──────────── -->
+
+    <customrecordcustomfield scriptid="custrecord_bm_schedule_time">
+      <fieldtype>TEXT</fieldtype>
+      <label>Scheduled Run Time (HH:MM)</label>
+      <ismandatory>F</ismandatory>
+      <defaultvalue>10:00</defaultvalue>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Informational display of the daily scheduled auto-match time (e.g. "10:00"). The actual schedule is configured on the BM Scheduler script deployment.</helptext>
+    </customrecordcustomfield>
+
   </customrecordcustomfields>
   <isinactive>F</isinactive>
   <isordered>F</isordered>

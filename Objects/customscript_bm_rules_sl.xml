@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suitelet scriptid="customscript_bm_rules_sl">
+  <description>Bank Match – Reconciliation Rules Builder. Allows admins to define rules that control how the auto-match engine handles bank lines.</description>
+  <isinactive>F</isinactive>
+  <name>BM Rules Builder</name>
+  <notifyadmins>F</notifyadmins>
+  <notifyemails></notifyemails>
+  <notifygroup></notifygroup>
+  <notifyowner>T</notifyowner>
+  <scriptfile>[/SuiteScripts/BankMatch/BM_Rules_SL.js]</scriptfile>
+  <scriptdeployments>
+    <scriptdeployment scriptid="customdeploy_bm_rules_sl">
+      <allemployees>F</allemployees>
+      <allpartners>F</allpartners>
+      <allroles>T</allroles>
+      <eventtype></eventtype>
+      <isdeployed>T</isdeployed>
+      <isinactive>F</isinactive>
+      <loglevel>DEBUG</loglevel>
+      <runasrole>ADMINISTRATOR</runasrole>
+      <status>RELEASED</status>
+      <title>Bank Match – Reconciliation Rules</title>
+    </scriptdeployment>
+  </scriptdeployments>
+</suitelet>

@@ -7,13 +7,20 @@
  * Bank Match – Setup / Configuration Page
  *
  * Renders a clean, native NetSuite form that lets an admin configure:
- *   • Bank Account and Subsidiary
+ *   • Subsidiary (mandatory, first field — drives bank account list)
+ *   • Bank Account (populated server-side; only type=Bank for selected subsidiary)
  *   • Amount and Date tolerance for auto-matching
- *   • Approver and notification email
+ *   • Approver
  *   • Auto-suggest toggle
+ *   • Scheduled auto-match time (informational — set deployment schedule to match)
  *
  * The settings are stored in a single customrecord_bm_settings record
  * (one per NetSuite account).
+ *
+ * Subsidiary cascade:
+ *   When the user changes Subsidiary, BM_Setup_CS.js reloads the page with
+ *   ?custpage_sel_sub=<id>.  The server then populates the Bank Account dropdown
+ *   with only accounts of type Bank that belong to that subsidiary.
  */
 define([
     'N/ui/serverWidget',
@@ -25,13 +32,46 @@ define([
 ], function (ui, record, search, url, log, C) {
     'use strict';
 
+    var SF = C.SETTINGS_FIELDS;
+
+    // ── Bank account helper (bank-type only, filtered by subsidiary) ───────
+    function _getBankAccountsForSubsidiary(subsidiaryId) {
+        var accounts = [];
+        var filters  = [
+            ['type',       'anyof', 'Bank'], 'AND',
+            ['isinactive', 'is',    'F']
+        ];
+        if (subsidiaryId) {
+            filters.push('AND');
+            filters.push(['subsidiary', 'anyof', String(subsidiaryId)]);
+        }
+        try {
+            search.create({
+                type:    'account',
+                filters: filters,
+                columns: ['internalid', 'name', 'acctnumber']
+            }).run().each(function (row) {
+                var num  = row.getValue('acctnumber');
+                var name = row.getValue('name');
+                accounts.push({
+                    id:   row.getValue('internalid'),
+                    name: num ? num + ' ' + name : name
+                });
+                return true;
+            });
+        } catch (e) {
+            log.error('BM_Setup_SL._getBankAccountsForSubsidiary', e.message);
+        }
+        return accounts;
+    }
+
     // ── Load (or create) the single settings record ────────────────────────
     function _loadSettings() {
-        var SF     = C.SETTINGS_FIELDS;
+        var cols = Object.values(SF);
         var result = search.create({
             type:    C.RECORDS.SETTINGS,
             filters: [['isinactive', 'is', 'F']],
-            columns: Object.values(SF)
+            columns: cols
         }).run().getRange({ start: 0, end: 1 });
 
         if (result && result.length > 0) {
@@ -48,22 +88,32 @@ define([
                 suspenseAccount: row.getValue(SF.SUSPENSE_ACCOUNT),
                 defaultDept:     row.getValue(SF.DEFAULT_DEPT)     || '',
                 defaultClass:    row.getValue(SF.DEFAULT_CLASS)    || '',
-                defaultLocation: row.getValue(SF.DEFAULT_LOCATION) || ''
+                defaultLocation: row.getValue(SF.DEFAULT_LOCATION) || '',
+                scheduleTime:    row.getValue(SF.SCHEDULE_TIME)    || '10:00'
             };
         }
         return null;
     }
 
     // ── Build the settings form ────────────────────────────────────────────
-    function _buildForm(settings) {
+    /**
+     * @param {object|null} settings  - loaded settings record (or null)
+     * @param {string}      selectedSubsidiary  - from URL param custpage_sel_sub
+     */
+    function _buildForm(settings, selectedSubsidiary) {
         var form = ui.createForm({ title: 'Bank Match – Setup' });
         form.clientScriptModulePath = './BM_Setup_CS.js';
 
-        // ─ Navigation shortcut ──────────────────────────────────────────────
+        // ─ Navigation buttons ────────────────────────────────────────────────
         form.addButton({
-            id:    'btn_go_main',
-            label: 'Go to Reconciliation',
+            id:           'btn_go_main',
+            label:        'Go to Reconciliation',
             functionName: 'goToMain'
+        });
+        form.addButton({
+            id:           'btn_go_rules',
+            label:        'Reconciliation Rules',
+            functionName: 'goToRules'
         });
 
         // ─ Bank & Subsidiary ────────────────────────────────────────────────
@@ -73,24 +123,41 @@ define([
         });
         grpBank.isBorderHidden = false;
 
+        // 1. Subsidiary FIRST — mandatory — drives bank account list
+        var fldSub = form.addField({
+            id:        SF.SUBSIDIARY,
+            type:      ui.FieldType.SELECT,
+            label:     'Subsidiary',
+            source:    'subsidiary',
+            container: 'grp_bank'
+        });
+        fldSub.isMandatory = true;
+        fldSub.helpText = 'Select a subsidiary first. The Bank Account list will update to show only bank accounts for this subsidiary.';
+
+        // 2. Bank Account — SELECT with options populated server-side
+        //    Only shows accounts of type Bank for the selected subsidiary.
         var fldAccount = form.addField({
-            id:       C.SETTINGS_FIELDS.BANK_ACCOUNT,
-            type:     ui.FieldType.SELECT,
-            label:    'Bank Account',
-            source:   'account',
+            id:        SF.BANK_ACCOUNT,
+            type:      ui.FieldType.SELECT,
+            label:     'Bank Account',
             container: 'grp_bank'
         });
         fldAccount.isMandatory = true;
-        fldAccount.helpText = 'Select the GL bank account used for reconciliation.';
+        fldAccount.helpText    = 'Only accounts of type "Bank" for the selected subsidiary are shown.';
 
-        var fldSub = form.addField({
-            id:       C.SETTINGS_FIELDS.SUBSIDIARY,
-            type:     ui.FieldType.SELECT,
-            label:    'Subsidiary',
-            source:   'subsidiary',
-            container: 'grp_bank'
-        });
-        fldSub.helpText = 'Leave blank to match across all subsidiaries.';
+        var effectiveSub = selectedSubsidiary
+            || (settings && settings.subsidiary)
+            || '';
+
+        if (effectiveSub) {
+            var bankAccounts = _getBankAccountsForSubsidiary(effectiveSub);
+            fldAccount.addSelectOption({ value: '', text: '— Select Bank Account —' });
+            bankAccounts.forEach(function (acct) {
+                fldAccount.addSelectOption({ value: acct.id, text: acct.name });
+            });
+        } else {
+            fldAccount.addSelectOption({ value: '', text: '— Select Subsidiary first —' });
+        }
 
         // ─ Matching Tolerances ──────────────────────────────────────────────
         var grpMatch = form.addFieldGroup({
@@ -99,25 +166,23 @@ define([
         });
 
         var fldTolAmt = form.addField({
-            id:        C.SETTINGS_FIELDS.TOLERANCE_AMT,
+            id:        SF.TOLERANCE_AMT,
             type:      ui.FieldType.CURRENCY,
             label:     'Amount Tolerance',
             container: 'grp_match'
         });
-        fldTolAmt.defaultValue = '0.01';
         fldTolAmt.helpText = 'Maximum allowed difference between bank amount and NetSuite amount.';
 
         var fldTolDays = form.addField({
-            id:        C.SETTINGS_FIELDS.TOLERANCE_DAYS,
+            id:        SF.TOLERANCE_DAYS,
             type:      ui.FieldType.INTEGER,
             label:     'Date Tolerance (days)',
             container: 'grp_match'
         });
-        fldTolDays.defaultValue = '5';
         fldTolDays.helpText = 'Maximum number of days difference for date matching.';
 
         var fldAutoSuggest = form.addField({
-            id:        C.SETTINGS_FIELDS.AUTO_SUGGEST,
+            id:        SF.AUTO_SUGGEST,
             type:      ui.FieldType.CHECKBOX,
             label:     'Auto-suggest Matches on Import',
             container: 'grp_match'
@@ -140,17 +205,50 @@ define([
             '<div style="padding:8px 0;color:#555;font-size:12px;">' +
             '&#9432;&nbsp; Approval is <strong>always required</strong> before any reconciliation ' +
             'is applied. The approver opens pending proposals in the Bank Match dashboard and sets ' +
-            'Status to <strong>Approved</strong>.' +
+            'Status to <strong>Approved</strong>. Upon approval, NetSuite transactions are created ' +
+            'automatically — no further action needed.' +
             '</div>';
 
         var fldApprover = form.addField({
-            id:        C.SETTINGS_FIELDS.APPROVER,
+            id:        SF.APPROVER,
             type:      ui.FieldType.SELECT,
             label:     'Approver',
             source:    'employee',
             container: 'grp_approval'
         });
         fldApprover.isMandatory = true;
+
+        // ─ Scheduled Auto-Match ─────────────────────────────────────────────
+        var grpSchedule = form.addFieldGroup({
+            id:    'grp_schedule',
+            label: 'Scheduled Auto-Match'
+        });
+
+        var schedNote = form.addField({
+            id:        'custpage_schedule_note',
+            type:      ui.FieldType.INLINEHTML,
+            label:     ' ',
+            container: 'grp_schedule'
+        });
+        schedNote.defaultValue =
+            '<div style="padding:6px 0;color:#555;font-size:12px;">' +
+            '&#9432;&nbsp; The Bank Match Scheduler script (<strong>BM Scheduler</strong>) runs ' +
+            'auto-match automatically every day. To change the run time, go to ' +
+            '<em>Customization &rsaquo; Scripting &rsaquo; Scripts</em>, open the ' +
+            '<strong>BM Scheduler</strong> deployment, and edit the schedule there.' +
+            '<br>The time below is <strong>informational only</strong> — it is shown in ' +
+            'the dashboard so your team knows when the next automatic run is scheduled.' +
+            '</div>';
+
+        var fldScheduleTime = form.addField({
+            id:        SF.SCHEDULE_TIME,
+            type:      ui.FieldType.TEXT,
+            label:     'Scheduled Run Time (HH:MM)',
+            container: 'grp_schedule'
+        });
+        fldScheduleTime.helpText =
+            'For display purposes only (e.g. "10:00"). ' +
+            'Set the actual schedule on the BM Scheduler script deployment.';
 
         // ─ Advanced: GL Accounts for variance write-off & suspense ──────────
         var grpGL = form.addFieldGroup({
@@ -173,7 +271,7 @@ define([
             '</div>';
 
         var fldFeeAcct = form.addField({
-            id:        C.SETTINGS_FIELDS.FEE_ACCOUNT,
+            id:        SF.FEE_ACCOUNT,
             type:      ui.FieldType.SELECT,
             label:     'Default Bank Fee Account',
             source:    'account',
@@ -182,7 +280,7 @@ define([
         fldFeeAcct.helpText = 'GL expense account for variance write-offs on tolerance matches.';
 
         var fldSuspenseAcct = form.addField({
-            id:        C.SETTINGS_FIELDS.SUSPENSE_ACCOUNT,
+            id:        SF.SUSPENSE_ACCOUNT,
             type:      ui.FieldType.SELECT,
             label:     'Default Suspense Account',
             source:    'account',
@@ -210,7 +308,7 @@ define([
             '</div>';
 
         var fldDept = form.addField({
-            id:        C.SETTINGS_FIELDS.DEFAULT_DEPT,
+            id:        SF.DEFAULT_DEPT,
             type:      ui.FieldType.SELECT,
             label:     'Default Department',
             source:    'department',
@@ -219,7 +317,7 @@ define([
         fldDept.helpText = 'Applied to all Journal Entry lines when department is mandatory.';
 
         var fldClass = form.addField({
-            id:        C.SETTINGS_FIELDS.DEFAULT_CLASS,
+            id:        SF.DEFAULT_CLASS,
             type:      ui.FieldType.SELECT,
             label:     'Default Class',
             source:    'classification',
@@ -228,7 +326,7 @@ define([
         fldClass.helpText = 'Applied to all Journal Entry lines when class is mandatory.';
 
         var fldLocation = form.addField({
-            id:        C.SETTINGS_FIELDS.DEFAULT_LOCATION,
+            id:        SF.DEFAULT_LOCATION,
             type:      ui.FieldType.SELECT,
             label:     'Default Location',
             source:    'location',
@@ -242,20 +340,22 @@ define([
                 .updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN })
                 .defaultValue = settings.id;
 
-            fldAccount.defaultValue      = settings.bankAccount;
             fldSub.defaultValue          = settings.subsidiary;
-            fldTolAmt.defaultValue       = settings.tolAmt     || '50.00';
-            fldTolDays.defaultValue      = settings.tolDays    || '5';
+            fldAccount.defaultValue      = settings.bankAccount;
+            fldTolAmt.defaultValue       = settings.tolAmt       || '50.00';
+            fldTolDays.defaultValue      = settings.tolDays      || '5';
             fldApprover.defaultValue     = settings.approver;
             fldAutoSuggest.defaultValue  = settings.autoSuggest === 'T' ? 'T' : 'F';
-            fldFeeAcct.defaultValue      = settings.feeAccount      || '';
-            fldSuspenseAcct.defaultValue = settings.suspenseAccount || '';
-            fldDept.defaultValue         = settings.defaultDept     || '';
-            fldClass.defaultValue        = settings.defaultClass    || '';
-            fldLocation.defaultValue     = settings.defaultLocation || '';
+            fldFeeAcct.defaultValue      = settings.feeAccount       || '';
+            fldSuspenseAcct.defaultValue = settings.suspenseAccount  || '';
+            fldDept.defaultValue         = settings.defaultDept      || '';
+            fldClass.defaultValue        = settings.defaultClass     || '';
+            fldLocation.defaultValue     = settings.defaultLocation  || '';
+            fldScheduleTime.defaultValue = settings.scheduleTime     || '10:00';
         } else {
-            fldTolAmt.defaultValue  = '50.00';
-            fldTolDays.defaultValue = '5';
+            fldTolAmt.defaultValue       = '50.00';
+            fldTolDays.defaultValue      = '5';
+            fldScheduleTime.defaultValue = '10:00';
         }
 
         form.addSubmitButton({ label: 'Save Settings' });
@@ -264,20 +364,20 @@ define([
 
     // ── Save settings from POST ───────────────────────────────────────────
     function _saveSettings(params) {
-        var SF         = C.SETTINGS_FIELDS;
         var settingsId = params.custpage_settings_id;
         var values = {};
         values[SF.BANK_ACCOUNT]      = parseInt(params[SF.BANK_ACCOUNT], 10) || '';
-        values[SF.SUBSIDIARY]        = parseInt(params[SF.SUBSIDIARY], 10)  || '';
+        values[SF.SUBSIDIARY]        = parseInt(params[SF.SUBSIDIARY], 10)   || '';
         values[SF.TOLERANCE_AMT]     = params[SF.TOLERANCE_AMT];
         values[SF.TOLERANCE_DAYS]    = params[SF.TOLERANCE_DAYS];
         values[SF.APPROVER]          = parseInt(params[SF.APPROVER], 10) || '';
-        values[SF.AUTO_SUGGEST]      = params[SF.AUTO_SUGGEST]     || 'F';
-        values[SF.FEE_ACCOUNT]       = params[SF.FEE_ACCOUNT]      || '';
-        values[SF.SUSPENSE_ACCOUNT]  = params[SF.SUSPENSE_ACCOUNT] || '';
-        values[SF.DEFAULT_DEPT]      = params[SF.DEFAULT_DEPT]     || '';
-        values[SF.DEFAULT_CLASS]     = params[SF.DEFAULT_CLASS]    || '';
-        values[SF.DEFAULT_LOCATION]  = params[SF.DEFAULT_LOCATION] || '';
+        values[SF.AUTO_SUGGEST]      = params[SF.AUTO_SUGGEST]      || 'F';
+        values[SF.FEE_ACCOUNT]       = params[SF.FEE_ACCOUNT]       || '';
+        values[SF.SUSPENSE_ACCOUNT]  = params[SF.SUSPENSE_ACCOUNT]  || '';
+        values[SF.DEFAULT_DEPT]      = params[SF.DEFAULT_DEPT]      || '';
+        values[SF.DEFAULT_CLASS]     = params[SF.DEFAULT_CLASS]     || '';
+        values[SF.DEFAULT_LOCATION]  = params[SF.DEFAULT_LOCATION]  || '';
+        values[SF.SCHEDULE_TIME]     = params[SF.SCHEDULE_TIME]     || '10:00';
 
         // Load or create the record — never use submitFields for bank account because
         // NS validates the bank account source filter against the subsidiary that is
@@ -295,7 +395,8 @@ define([
         [
             SF.TOLERANCE_AMT, SF.TOLERANCE_DAYS, SF.APPROVER, SF.AUTO_SUGGEST,
             SF.FEE_ACCOUNT, SF.SUSPENSE_ACCOUNT,
-            SF.DEFAULT_DEPT, SF.DEFAULT_CLASS, SF.DEFAULT_LOCATION
+            SF.DEFAULT_DEPT, SF.DEFAULT_CLASS, SF.DEFAULT_LOCATION,
+            SF.SCHEDULE_TIME
         ].forEach(function (fid) {
             rec.setValue({ fieldId: fid, value: values[fid] || '' });
         });
@@ -321,9 +422,11 @@ define([
             return;
         }
 
-        // GET
+        // GET — read selected subsidiary from URL (cascade reload) or saved settings
+        var selectedSubsidiary = req.parameters.custpage_sel_sub || '';
+
         var settings = _loadSettings();
-        var form     = _buildForm(settings);
+        var form     = _buildForm(settings, selectedSubsidiary);
 
         if (req.parameters.saved === '1') {
             form.addPageInitMessage({

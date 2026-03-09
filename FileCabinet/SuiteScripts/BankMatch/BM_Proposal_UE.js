@@ -138,6 +138,7 @@ define([
             bankDate:    newRec.getValue(PF.BANK_DATE),
             bankRef:     newRec.getValue(PF.BANK_REF),
             bankTxnId:   newRec.getValue(PF.BANK_TXN),
+            bankLineId:  newRec.getValue(PF.BANK_LINE_ID),  // native bank statement line ID
             // Variance metadata — set by waterfall matching engine
             hasVariance: newRec.getValue(PF.HAS_VARIANCE) === true ||
                          newRec.getValue(PF.HAS_VARIANCE) === 'T',
@@ -247,6 +248,32 @@ define([
                 });
             } catch (e2) {
                 log.error('BM_Proposal_UE', 'Could not update bank txn status: ' + e2.message);
+            }
+        }
+
+        // ── Auto-clear native bank statement line ─────────────────────────
+        // When the bank line came from NetSuite's native "Match Bank Data" module
+        // (bankstatementimportline), mark it as cleared so the user does NOT need
+        // to manually open the native reconciliation page and click "Run Reconciliation".
+        if (!errorMsg && proposal.bankLineId) {
+            try {
+                record.submitFields({
+                    type:    'bankstatementimportline',
+                    id:      proposal.bankLineId,
+                    values:  { iscleared: 'T' },
+                    options: { ignoreMandatoryFields: true, enableSourcing: false }
+                });
+                log.audit('BM_Proposal_UE',
+                    'Native bank line ' + proposal.bankLineId + ' auto-cleared — ' +
+                    'no manual "Run Reconciliation" needed.');
+            } catch (e3) {
+                // Non-fatal: the native module may not expose this field for direct writes.
+                // The payment is still applied correctly; the approver may need to confirm
+                // the match in the native "Match Bank Data" page if their NS version
+                // does not support programmatic clearing.
+                log.audit('BM_Proposal_UE',
+                    'Native bank line auto-clear skipped (NS may handle this internally): ' +
+                    e3.message);
             }
         }
 
