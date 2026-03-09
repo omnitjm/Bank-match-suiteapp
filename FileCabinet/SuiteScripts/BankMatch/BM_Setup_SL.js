@@ -267,11 +267,11 @@ define([
         var SF         = C.SETTINGS_FIELDS;
         var settingsId = params.custpage_settings_id;
         var values = {};
-        values[SF.BANK_ACCOUNT]      = params[SF.BANK_ACCOUNT];
-        values[SF.SUBSIDIARY]        = params[SF.SUBSIDIARY]       || '';
+        values[SF.BANK_ACCOUNT]      = parseInt(params[SF.BANK_ACCOUNT], 10) || '';
+        values[SF.SUBSIDIARY]        = parseInt(params[SF.SUBSIDIARY], 10)  || '';
         values[SF.TOLERANCE_AMT]     = params[SF.TOLERANCE_AMT];
         values[SF.TOLERANCE_DAYS]    = params[SF.TOLERANCE_DAYS];
-        values[SF.APPROVER]          = params[SF.APPROVER];
+        values[SF.APPROVER]          = parseInt(params[SF.APPROVER], 10) || '';
         values[SF.AUTO_SUGGEST]      = params[SF.AUTO_SUGGEST]     || 'F';
         values[SF.FEE_ACCOUNT]       = params[SF.FEE_ACCOUNT]      || '';
         values[SF.SUSPENSE_ACCOUNT]  = params[SF.SUSPENSE_ACCOUNT] || '';
