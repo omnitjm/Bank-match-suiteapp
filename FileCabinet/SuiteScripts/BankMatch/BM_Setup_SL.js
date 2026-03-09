@@ -279,22 +279,29 @@ define([
         values[SF.DEFAULT_CLASS]     = params[SF.DEFAULT_CLASS]    || '';
         values[SF.DEFAULT_LOCATION]  = params[SF.DEFAULT_LOCATION] || '';
 
-        if (settingsId) {
-            record.submitFields({
-                type:    C.RECORDS.SETTINGS,
-                id:      settingsId,
-                values:  values,
-                options: { ignoreMandatoryFields: true }
-            });
-            log.audit('BM_Setup_SL', 'Settings updated, id=' + settingsId);
-        } else {
-            var rec = record.create({ type: C.RECORDS.SETTINGS });
-            Object.keys(values).forEach(function (fid) {
-                rec.setValue({ fieldId: fid, value: values[fid] });
-            });
-            var newId = rec.save();
-            log.audit('BM_Setup_SL', 'Settings created, id=' + newId);
-        }
+        // Load or create the record — never use submitFields for bank account because
+        // NS validates the bank account source filter against the subsidiary that is
+        // already on the record at save time.  We must write subsidiary first, then
+        // bank account, so the source filter resolves correctly.
+        var rec = settingsId
+            ? record.load({ type: C.RECORDS.SETTINGS, id: settingsId, isDynamic: false })
+            : record.create({ type: C.RECORDS.SETTINGS });
+
+        // 1. Subsidiary first — satisfies the bank-account source filter
+        rec.setValue({ fieldId: SF.SUBSIDIARY,   value: values[SF.SUBSIDIARY]   || '' });
+        // 2. Bank account — validated against the subsidiary just set
+        rec.setValue({ fieldId: SF.BANK_ACCOUNT, value: values[SF.BANK_ACCOUNT] || '' });
+        // 3. Remaining fields — order is not sensitive
+        [
+            SF.TOLERANCE_AMT, SF.TOLERANCE_DAYS, SF.APPROVER, SF.AUTO_SUGGEST,
+            SF.FEE_ACCOUNT, SF.SUSPENSE_ACCOUNT,
+            SF.DEFAULT_DEPT, SF.DEFAULT_CLASS, SF.DEFAULT_LOCATION
+        ].forEach(function (fid) {
+            rec.setValue({ fieldId: fid, value: values[fid] || '' });
+        });
+
+        var savedId = rec.save({ ignoreMandatoryFields: true });
+        log.audit('BM_Setup_SL', (settingsId ? 'Settings updated' : 'Settings created') + ', id=' + savedId);
     }
 
     // ── Entry point ───────────────────────────────────────────────────────
