@@ -1,25 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<suitelet scriptid="customscript_bm_setup_sl">
-  <description>Bank Match – Setup / Configuration Page</description>
+<clientscript scriptid="customscript_bm_rules_cs">
+  <description>Bank Match – Client Script for Reconciliation Rules Builder</description>
   <isinactive>F</isinactive>
-  <name>BM Setup Suitelet</name>
+  <name>BM Rules Client Script</name>
   <notifyadmins>F</notifyadmins>
   <notifyemails></notifyemails>
   <notifygroup></notifygroup>
   <notifyowner>T</notifyowner>
-  <scriptfile>[/SuiteScripts/BankMatch/BM_Setup_SL.js]</scriptfile>
+  <scriptfile>[/SuiteScripts/BankMatch/BM_Rules_CS.js]</scriptfile>
   <scriptdeployments>
-    <scriptdeployment scriptid="customdeploy_bm_setup_sl">
-      <allemployees>F</allemployees>
+    <scriptdeployment scriptid="customdeploy_bm_rules_cs">
+      <allemployees>T</allemployees>
       <allpartners>F</allpartners>
       <allroles>T</allroles>
-      <eventtype></eventtype>
       <isdeployed>T</isdeployed>
       <isinactive>F</isinactive>
       <loglevel>DEBUG</loglevel>
-      <runasrole>ADMINISTRATOR</runasrole>
       <status>RELEASED</status>
-      <title>Bank Match – Setup</title>
+      <title>BM Rules Client Script</title>
     </scriptdeployment>
   </scriptdeployments>
-</suitelet>
+</clientscript>

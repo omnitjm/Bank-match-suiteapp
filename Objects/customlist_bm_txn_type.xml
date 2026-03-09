@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <customlist scriptid="customlist_bm_txn_type">
-  <custvalues>
-    <custvalue scriptid="customvalue_bm_txn_type_1">
+  <customvalues>
+    <customvalue scriptid="customvalue_bm_txn_type_1">
       <isinactive>F</isinactive>
       <value>Customer Payment</value>
-    </custvalue>
-    <custvalue scriptid="customvalue_bm_txn_type_2">
+    </customvalue>
+    <customvalue scriptid="customvalue_bm_txn_type_2">
       <isinactive>F</isinactive>
       <value>Vendor Payment</value>
-    </custvalue>
-    <custvalue scriptid="customvalue_bm_txn_type_3">
+    </customvalue>
+    <customvalue scriptid="customvalue_bm_txn_type_3">
       <isinactive>F</isinactive>
       <value>Journal Entry</value>
-    </custvalue>
-  </custvalues>
+    </customvalue>
+  </customvalues>
   <description>Transaction type for Bank Match proposals (Customer Payment, Vendor Payment, or Journal Entry)</description>
   <isordered>F</isordered>
   <name>BM Transaction Type</name>

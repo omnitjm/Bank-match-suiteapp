@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scheduledscript scriptid="customscript_bm_scheduler_ss">
+  <description>Bank Match – Daily Scheduled Auto-Match. Runs the waterfall matching engine for all unmatched bank lines and creates pending proposals.</description>
+  <isinactive>F</isinactive>
+  <name>BM Scheduler</name>
+  <notifyadmins>F</notifyadmins>
+  <notifyemails></notifyemails>
+  <notifygroup></notifygroup>
+  <notifyowner>T</notifyowner>
+  <scriptfile>[/SuiteScripts/BankMatch/BM_Scheduler_SS.js]</scriptfile>
+  <scriptdeployments>
+    <scriptdeployment scriptid="customdeploy_bm_scheduler_ss">
+      <isdeployed>T</isdeployed>
+      <isinactive>F</isinactive>
+      <loglevel>AUDIT</loglevel>
+      <runasrole>ADMINISTRATOR</runasrole>
+      <status>RELEASED</status>
+      <title>BM Scheduler – Daily Auto-Match</title>
+      <!-- Schedule: daily at 10:00 AM. Adjust in NetSuite UI:
+           Customization → Scripting → Scripts → BM Scheduler → Deployments -->
+      <recurrence>
+        <daily>
+          <repeat>1</repeat>
+        </daily>
+      </recurrence>
+    </scriptdeployment>
+  </scriptdeployments>
+</scheduledscript>

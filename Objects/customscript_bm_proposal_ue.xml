@@ -8,7 +8,7 @@
   <notifygroup></notifygroup>
   <notifyowner>T</notifyowner>
   <scriptfile>[/SuiteScripts/BankMatch/BM_Proposal_UE.js]</scriptfile>
-  <deploymentmodels>
+  <scriptdeployments>
     <scriptdeployment scriptid="customdeploy_bm_proposal_ue">
       <allemployees>F</allemployees>
       <allpartners>F</allpartners>
@@ -17,10 +17,10 @@
       <isdeployed>T</isdeployed>
       <isinactive>F</isinactive>
       <loglevel>DEBUG</loglevel>
-      <recordtype>customrecord_bm_proposal</recordtype>
+      <recordtype>[scriptid=customrecord_bm_proposal]</recordtype>
       <runasrole>ADMINISTRATOR</runasrole>
       <status>RELEASED</status>
       <title>BM Proposal – Execute on Approval</title>
     </scriptdeployment>
-  </deploymentmodels>
+  </scriptdeployments>
 </usereventscript>

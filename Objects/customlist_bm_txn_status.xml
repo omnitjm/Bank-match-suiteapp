@@ -1,23 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <customlist scriptid="customlist_bm_txn_status">
-  <custvalues>
-    <custvalue scriptid="customvalue_bm_txn_status_1">
+  <customvalues>
+    <customvalue scriptid="customvalue_bm_txn_status_1">
       <isinactive>F</isinactive>
       <value>Unmatched</value>
-    </custvalue>
-    <custvalue scriptid="customvalue_bm_txn_status_2">
+    </customvalue>
+    <customvalue scriptid="customvalue_bm_txn_status_2">
       <isinactive>F</isinactive>
       <value>Proposed</value>
-    </custvalue>
-    <custvalue scriptid="customvalue_bm_txn_status_3">
+    </customvalue>
+    <customvalue scriptid="customvalue_bm_txn_status_3">
       <isinactive>F</isinactive>
       <value>Reconciled</value>
-    </custvalue>
-    <custvalue scriptid="customvalue_bm_txn_status_4">
+    </customvalue>
+    <customvalue scriptid="customvalue_bm_txn_status_4">
       <isinactive>F</isinactive>
       <value>Excluded</value>
-    </custvalue>
-  </custvalues>
+    </customvalue>
+  </customvalues>
   <description>Status values for imported bank statement lines</description>
   <isordered>F</isordered>
   <name>BM Bank Transaction Status</name>

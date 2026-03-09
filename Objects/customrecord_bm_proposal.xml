@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <customrecordtype scriptid="customrecord_bm_proposal">
-  <accesstype>USERROLE</accesstype>
+  <accesstype>CUSTRECORDENTRYPERM</accesstype>
   <allowattachments>F</allowattachments>
   <allowinlinedeleting>F</allowinlinedeleting>
   <allowinlineediting>F</allowinlineediting>
@@ -10,13 +10,13 @@
   <enablemailmerge>F</enablemailmerge>
   <enablenotes>T</enablenotes>
   <enablenumbering>F</enablenumbering>
-  <fields>
+  <customrecordcustomfields>
 
     <!-- ── Bank transaction link ────────────────────────────── -->
     <customrecordcustomfield scriptid="custrecord_bm_prop_bank_txn">
       <fieldtype>SELECT</fieldtype>
       <label>Bank Transaction</label>
-      <selectrecordtype>customrecord_bm_bank_txn</selectrecordtype>
+      <selectrecordtype>[scriptid=customrecord_bm_bank_txn]</selectrecordtype>
       <ismandatory>T</ismandatory>
       <showinlist>T</showinlist>
       <isformula>F</isformula>
@@ -27,7 +27,7 @@
     <customrecordcustomfield scriptid="custrecord_bm_prop_txn_type">
       <fieldtype>SELECT</fieldtype>
       <label>Transaction Type</label>
-      <selectrecordtype>customlist_bm_txn_type</selectrecordtype>
+      <selectrecordtype>[scriptid=customlist_bm_txn_type]</selectrecordtype>
       <ismandatory>T</ismandatory>
       <showinlist>T</showinlist>
       <isformula>F</isformula>
@@ -113,7 +113,7 @@
     <customrecordcustomfield scriptid="custrecord_bm_prop_status">
       <fieldtype>SELECT</fieldtype>
       <label>Status</label>
-      <selectrecordtype>customlist_bm_prop_status</selectrecordtype>
+      <selectrecordtype>[scriptid=customlist_bm_prop_status]</selectrecordtype>
       <ismandatory>T</ismandatory>
       <defaultvalue>1</defaultvalue>
       <showinlist>T</showinlist>
@@ -273,8 +273,7 @@
       <helptext>The GL bank account this proposal belongs to. Populated automatically from the active bank account context when the proposal is created. Used by the Global Overview to count proposals per account.</helptext>
     </customrecordcustomfield>
 
-  </fields>
-  <hierarchytype>NONE</hierarchytype>
+  </customrecordcustomfields>
   <isinactive>F</isinactive>
   <isordered>F</isordered>
   <name>BM Match Proposal</name>
@@ -282,5 +281,4 @@
   <showcreationdate>T</showcreationdate>
   <showlastmodified>T</showlastmodified>
   <showowner>T</showowner>
-  <showpermissions>F</showpermissions>
 </customrecordtype>

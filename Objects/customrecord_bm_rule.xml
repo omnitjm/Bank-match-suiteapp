@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<customrecordtype scriptid="customrecord_bm_rule">
+  <accesstype>CUSTRECORDENTRYPERM</accesstype>
+  <allowattachments>F</allowattachments>
+  <allowinlinedeleting>T</allowinlinedeleting>
+  <allowinlineediting>T</allowinlineediting>
+  <allowquickadd>F</allowquickadd>
+  <allowuiaccess>T</allowuiaccess>
+  <enablekeywords>F</enablekeywords>
+  <enablemailmerge>F</enablemailmerge>
+  <enablenumbering>F</enablenumbering>
+  <customrecordcustomfields>
+
+    <customrecordcustomfield scriptid="custrecord_bm_rule_name">
+      <fieldtype>TEXT</fieldtype>
+      <label>Rule Name</label>
+      <ismandatory>T</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Short descriptive label for this rule (e.g. "Bank Fee – Auto Approve").</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_rule_priority">
+      <fieldtype>INTEGER</fieldtype>
+      <label>Priority</label>
+      <ismandatory>F</ismandatory>
+      <defaultvalue>10</defaultvalue>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Lower number = evaluated first. Rules with the same priority are evaluated in creation order.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_rule_cond_field">
+      <fieldtype>TEXT</fieldtype>
+      <label>Condition Field</label>
+      <ismandatory>T</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Bank line field to evaluate: description | amount | reference</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_rule_cond_op">
+      <fieldtype>TEXT</fieldtype>
+      <label>Condition Operator</label>
+      <ismandatory>T</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>How to compare: contains | equals | startswith | endswith | regex</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_rule_cond_value">
+      <fieldtype>TEXT</fieldtype>
+      <label>Condition Value</label>
+      <ismandatory>T</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>The value to match against the selected bank line field.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_rule_action">
+      <fieldtype>TEXT</fieldtype>
+      <label>Action</label>
+      <ismandatory>T</ismandatory>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>What to do when this rule matches: auto_approve | create_pending | skip</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_rule_is_active">
+      <fieldtype>CHECKBOX</fieldtype>
+      <label>Active</label>
+      <ismandatory>F</ismandatory>
+      <defaultchecked>T</defaultchecked>
+      <showinlist>T</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Inactive rules are ignored by the matching engine.</helptext>
+    </customrecordcustomfield>
+
+  </customrecordcustomfields>
+  <isinactive>F</isinactive>
+  <isordered>F</isordered>
+  <name>BM Reconciliation Rule</name>
+  <recordname>Rule</recordname>
+  <showcreationdate>F</showcreationdate>
+  <showlastmodified>T</showlastmodified>
+  <showowner>F</showowner>
+</customrecordtype>

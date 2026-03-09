@@ -39,7 +39,8 @@ define([], function () {
         RECORDS: {
             SETTINGS:  'customrecord_bm_settings',
             BANK_TXN:  'customrecord_bm_bank_txn',
-            PROPOSAL:  'customrecord_bm_proposal'
+            PROPOSAL:  'customrecord_bm_proposal',
+            RULE:      'customrecord_bm_rule'        // Reconciliation rules
         },
 
         // ── Settings Record Field IDs ────────────────────────────────────────
@@ -55,7 +56,20 @@ define([], function () {
             // Mandatory segment fallbacks — applied to all Journal Entry lines
             DEFAULT_DEPT:       'custrecord_bm_default_department', // SELECT → Department
             DEFAULT_CLASS:      'custrecord_bm_default_class',      // SELECT → Classification
-            DEFAULT_LOCATION:   'custrecord_bm_default_location'    // SELECT → Location
+            DEFAULT_LOCATION:   'custrecord_bm_default_location',   // SELECT → Location
+            // Scheduled auto-match time (informational, e.g. "10:00")
+            SCHEDULE_TIME:      'custrecord_bm_schedule_time'       // TEXT
+        },
+
+        // ── Reconciliation Rule Record Field IDs ─────────────────────────────
+        RULE_FIELDS: {
+            NAME:       'custrecord_bm_rule_name',       // TEXT – rule label
+            PRIORITY:   'custrecord_bm_rule_priority',   // INTEGER – lower = higher priority
+            COND_FIELD: 'custrecord_bm_rule_cond_field', // TEXT – description|amount|reference
+            COND_OP:    'custrecord_bm_rule_cond_op',    // TEXT – contains|equals|startswith|endswith|regex
+            COND_VALUE: 'custrecord_bm_rule_cond_value', // TEXT – value to test against
+            ACTION:     'custrecord_bm_rule_action',     // TEXT – auto_approve|create_pending|skip
+            IS_ACTIVE:  'custrecord_bm_rule_is_active'  // CHECKBOX
         },
 
         // ── Bank Transaction Record Field IDs ────────────────────────────────
@@ -152,7 +166,11 @@ define([], function () {
             SETUP_SL:         'customscript_bm_setup_sl',
             SETUP_DEPLOY:     'customdeploy_bm_setup_sl',
             RECONCILE_RL:     'customscript_bm_reconcile_rl',
-            RECONCILE_DEPLOY: 'customdeploy_bm_reconcile_rl'
+            RECONCILE_DEPLOY: 'customdeploy_bm_reconcile_rl',
+            SCHEDULER_SS:     'customscript_bm_scheduler_ss',
+            SCHEDULER_DEPLOY: 'customdeploy_bm_scheduler_ss',
+            RULES_SL:         'customscript_bm_rules_sl',
+            RULES_DEPLOY:     'customdeploy_bm_rules_sl'
         }
     };
 });
