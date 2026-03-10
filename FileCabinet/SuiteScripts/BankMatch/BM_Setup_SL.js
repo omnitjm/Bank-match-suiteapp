@@ -132,16 +132,19 @@ define([
         });
         grpBank.isBorderHidden = false;
 
-        // 1. Bank Account — use custpage_ prefix to avoid custom record field validation
+        // 1. Bank Account — filtered to Bank-type accounts only (no source= to avoid auto-select of first account)
         var fldAccount = form.addField({
             id:        'custpage_bank_acct_sel',
             type:      ui.FieldType.SELECT,
             label:     'Bank Account',
-            source:    'account',
             container: 'grp_bank'
         });
         fldAccount.isMandatory = true;
         fldAccount.helpText    = 'Select the bank account to reconcile. Subsidiary will be set automatically on save.';
+        fldAccount.addSelectOption({ value: '', text: '-- Select Bank Account --' });
+        _getAllBankAccounts().forEach(function (acct) {
+            fldAccount.addSelectOption({ value: String(acct.id), text: acct.label });
+        });
 
         // 2. Subsidiary — read-only, derived from the saved bank account
         var savedSub = settings ? _getSubsidiaryForAccount(settings.bankAccount) : { name: '' };
