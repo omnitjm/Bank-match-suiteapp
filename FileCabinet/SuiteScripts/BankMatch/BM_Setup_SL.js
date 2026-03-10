@@ -391,7 +391,7 @@ define([
         rec.setValue({ fieldId: SF.TOLERANCE_AMT,    value: params[SF.TOLERANCE_AMT]    || '' });
         rec.setValue({ fieldId: SF.TOLERANCE_DAYS,   value: params[SF.TOLERANCE_DAYS]   || '' });
         rec.setValue({ fieldId: SF.APPROVER,         value: parseInt(params[SF.APPROVER], 10) || '' });
-        rec.setValue({ fieldId: SF.AUTO_SUGGEST,     value: params[SF.AUTO_SUGGEST]     || 'F' });
+        rec.setValue({ fieldId: SF.AUTO_SUGGEST,     value: params[SF.AUTO_SUGGEST] === 'T' });
         rec.setValue({ fieldId: SF.FEE_ACCOUNT,      value: params[SF.FEE_ACCOUNT]      || '' });
         rec.setValue({ fieldId: SF.SUSPENSE_ACCOUNT, value: params[SF.SUSPENSE_ACCOUNT] || '' });
         rec.setValue({ fieldId: SF.DEFAULT_DEPT,     value: params[SF.DEFAULT_DEPT]     || '' });
