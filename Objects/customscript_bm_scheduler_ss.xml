@@ -14,7 +14,7 @@
       <isinactive>F</isinactive>
       <loglevel>AUDIT</loglevel>
       <runasrole>ADMINISTRATOR</runasrole>
-      <status>RELEASED</status>
+      <status>NOTSCHEDULED</status>
       <title>BM Scheduler – Daily Auto-Match</title>
       <!-- Schedule: daily at 10:00 AM. Adjust in NetSuite UI:
            Customization → Scripting → Scripts → BM Scheduler → Deployments -->
