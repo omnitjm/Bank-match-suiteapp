@@ -21,6 +21,10 @@
       <isinactive>F</isinactive>
       <value>Failed</value>
     </customvalue>
+    <customvalue scriptid="customvalue_bm_prop_status_6">
+      <isinactive>F</isinactive>
+      <value>Reversed</value>
+    </customvalue>
   </customvalues>
   <description>Status values for Bank Match reconciliation proposals</description>
   <isordered>F</isordered>

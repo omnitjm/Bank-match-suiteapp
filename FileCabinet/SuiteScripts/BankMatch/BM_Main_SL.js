@@ -72,7 +72,7 @@ define([
 
     var STATUS_LABELS = {
         '1': 'Pending', '2': 'Approved',
-        '3': 'Rejected', '4': 'Applied', '5': 'Failed'
+        '3': 'Rejected', '4': 'Applied', '5': 'Failed', '6': 'Reversed'
     };
 
     // ════════════════════════════════════════════════════════════════════════
@@ -80,13 +80,19 @@ define([
     // ════════════════════════════════════════════════════════════════════════
 
     /**
-     * Load the single BM settings record.
+     * Load BM settings for a specific bank account.
+     * Falls back to first active settings record if no account specified.
      * Returns null if not yet configured.
      */
-    function _getSettings() {
+    function _getSettings(bankAccountId) {
+        var filters = [['isinactive', 'is', 'F']];
+        if (bankAccountId) {
+            filters.push('AND');
+            filters.push([SF.BANK_ACCOUNT, 'anyof', String(bankAccountId)]);
+        }
         var rows = search.create({
             type:    C.RECORDS.SETTINGS,
-            filters: [['isinactive', 'is', 'F']],
+            filters: filters,
             columns: Object.values(SF)
         }).run().getRange({ start: 0, end: 1 });
 
@@ -106,6 +112,35 @@ define([
             defaultClass:    r.getValue(SF.DEFAULT_CLASS)    || '',
             defaultLocation: r.getValue(SF.DEFAULT_LOCATION) || ''
         };
+    }
+
+    /**
+     * Load ALL active settings records (one per bank account).
+     * Used by the scheduler and overview for iterating across accounts.
+     */
+    function _getAllSettings() {
+        var allSettings = [];
+        search.create({
+            type:    C.RECORDS.SETTINGS,
+            filters: [['isinactive', 'is', 'F']],
+            columns: Object.values(SF)
+        }).run().each(function (r) {
+            allSettings.push({
+                id:              r.id,
+                bankAccount:     r.getValue(SF.BANK_ACCOUNT),
+                subsidiary:      r.getValue(SF.SUBSIDIARY),
+                toleranceAmt:    parseFloat(r.getValue(SF.TOLERANCE_AMT))   || 50,
+                toleranceDays:   parseInt(r.getValue(SF.TOLERANCE_DAYS), 10) || 5,
+                approver:        r.getValue(SF.APPROVER),
+                feeAccount:      r.getValue(SF.FEE_ACCOUNT)      || '',
+                suspenseAccount: r.getValue(SF.SUSPENSE_ACCOUNT) || '',
+                defaultDept:     r.getValue(SF.DEFAULT_DEPT)     || '',
+                defaultClass:    r.getValue(SF.DEFAULT_CLASS)    || '',
+                defaultLocation: r.getValue(SF.DEFAULT_LOCATION) || ''
+            });
+            return true;
+        });
+        return allSettings;
     }
 
     /** Resolve the main Suitelet URL with optional params. */
@@ -322,6 +357,13 @@ define([
         propRec.setValue({ fieldId: PF.HAS_VARIANCE, value: !!matchResult.hasVariance });
         propRec.setValue({ fieldId: PF.VARIANCE_AMT, value: matchResult.varianceAmt || 0 });
 
+        // Many-to-one: store matched NS record IDs (comma-separated)
+        if (matchResult.matchedIds && matchResult.matchedIds.length > 1) {
+            try {
+                propRec.setValue({ fieldId: PF.MATCHED_NS_IDS, value: matchResult.matchedIds.join(',') });
+            } catch (e) { /* optional field */ }
+        }
+
         // Bank account link (for multi-account Global Overview filtering)
         if (bankAccountId) {
             try { propRec.setValue({ fieldId: PF.BANK_ACCT, value: bankAccountId }); } catch (e) { /* optional */ }
@@ -363,7 +405,8 @@ define([
                 PF.BANK_DATE, PF.BANK_AMOUNT, PF.BANK_REF,
                 PF.MATCH_AMOUNT, PF.STATUS, PF.NOTES,
                 PF.APPLIED_DATE, PF.ERROR_MSG, PF.APPLY_ERROR,
-                PF.APPLIED_TXN_ID, PF.HAS_VARIANCE, PF.VARIANCE_AMT
+                PF.APPLIED_TXN_ID, PF.HAS_VARIANCE, PF.VARIANCE_AMT,
+                PF.MATCHED_NS_IDS
             ]
         }).run().each(function (row) {
             results.push({
@@ -382,7 +425,8 @@ define([
                 applyError:   row.getValue(PF.APPLY_ERROR),
                 appliedTxnId: row.getValue(PF.APPLIED_TXN_ID),
                 hasVariance:  row.getValue(PF.HAS_VARIANCE) === 'T',
-                varianceAmt:  parseFloat(row.getValue(PF.VARIANCE_AMT)) || 0
+                varianceAmt:  parseFloat(row.getValue(PF.VARIANCE_AMT)) || 0,
+                matchedNsIds: row.getValue(PF.MATCHED_NS_IDS) || ''
             });
             return results.length < 500;
         });
@@ -399,6 +443,74 @@ define([
         return '<div style="background:' + color + ';border:1px solid ' + border + ';' +
                'padding:10px 14px;border-radius:4px;margin-bottom:8px;font-size:13px;">' +
                msg + '</div>';
+    }
+
+    // ── KPI helpers ─────────────────────────────────────────────────────────
+
+    function _kpiCard(title, value, color) {
+        return '<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid ' +
+            color + ';border-radius:4px;padding:10px 18px;min-width:120px;text-align:center;">' +
+            '<div style="font-size:22px;font-weight:700;color:' + color + ';">' + value + '</div>' +
+            '<div style="font-size:11px;color:#666;margin-top:2px;">' + title + '</div></div>';
+    }
+
+    function _computeKpis() {
+        var totalUnmatched = 0;
+        var totalPending   = 0;
+        var appliedCount   = 0;
+        var appliedToday   = 0;
+        var reversedCount  = 0;
+        var totalLines     = 0;
+
+        var bankAccounts = _getAllBankAccounts();
+        bankAccounts.forEach(function (acct) {
+            var um = _countUnmatchedLines(acct.id);
+            totalUnmatched += (um === '?' ? 0 : um);
+            totalPending   += _countPendingProposals(acct.id);
+        });
+        totalLines = totalUnmatched;
+
+        // Count applied proposals (all time)
+        try {
+            search.create({
+                type:    C.RECORDS.PROPOSAL,
+                filters: [['isinactive', 'is', 'F'], 'AND', [PF.STATUS, 'anyof', [PS.APPLIED]]],
+                columns: ['internalid']
+            }).run().each(function () { appliedCount++; return appliedCount < 10000; });
+        } catch (e) { /* skip */ }
+
+        // Count applied today
+        try {
+            var today = new Date();
+            today.setHours(0, 0, 0, 0);
+            search.create({
+                type:    C.RECORDS.PROPOSAL,
+                filters: [
+                    ['isinactive', 'is', 'F'], 'AND',
+                    [PF.STATUS, 'anyof', [PS.APPLIED]], 'AND',
+                    [PF.APPLIED_DATE, 'onorafter', today]
+                ],
+                columns: ['internalid']
+            }).run().each(function () { appliedToday++; return appliedToday < 10000; });
+        } catch (e) { /* skip */ }
+
+        // Count reversed
+        try {
+            search.create({
+                type:    C.RECORDS.PROPOSAL,
+                filters: [['isinactive', 'is', 'F'], 'AND', [PF.STATUS, 'anyof', [PS.REVERSED]]],
+                columns: ['internalid']
+            }).run().each(function () { reversedCount++; return reversedCount < 10000; });
+        } catch (e) { /* skip */ }
+
+        return {
+            totalUnmatched: totalUnmatched,
+            totalPending:   totalPending,
+            appliedCount:   appliedCount,
+            appliedToday:   appliedToday,
+            reversedCount:  reversedCount,
+            totalLines:     totalLines
+        };
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -435,6 +547,25 @@ define([
             'padding:8px 14px;border-radius:4px;margin-bottom:4px;font-size:12px;">' +
             '<strong>Global Overview</strong> — Select a bank account to open its matching workspace. ' +
             'Counts reflect currently unmatched bank lines and pending approval proposals per account.' +
+            '</div>';
+
+        // ── KPI Dashboard ────────────────────────────────────────────────
+        var kpiData = _computeKpis();
+        var kpiField = form.addField({
+            id:    'custpage_kpis',
+            type:  ui.FieldType.INLINEHTML,
+            label: ' '
+        });
+        var reconPct = kpiData.totalLines > 0
+            ? Math.round((kpiData.appliedCount / (kpiData.totalLines + kpiData.appliedCount)) * 100)
+            : 0;
+        kpiField.defaultValue =
+            '<div style="display:flex;gap:16px;margin:8px 0 12px 0;">' +
+            _kpiCard('Reconciliation %', reconPct + '%', '#1565c0') +
+            _kpiCard('Unmatched Lines', String(kpiData.totalUnmatched), '#e65100') +
+            _kpiCard('Pending Proposals', String(kpiData.totalPending), '#f9a825') +
+            _kpiCard('Applied Today', String(kpiData.appliedToday), '#2e7d32') +
+            _kpiCard('Reversed', String(kpiData.reversedCount), '#c62828') +
             '</div>';
 
         // ── Summary Sublist ────────────────────────────────────────────────
@@ -703,11 +834,11 @@ define([
         // ═══════════════════════════════════════════════════════════════════
         form.addTab({ id: 'tab_history', label: 'History' });
 
-        var history = _getProposals([PS.APPLIED, PS.REJECTED, PS.FAILED], bankAccountId);
+        var history = _getProposals([PS.APPLIED, PS.REJECTED, PS.FAILED, PS.REVERSED], bankAccountId);
         var sbHist  = form.addSublist({
             id:    'sl_history',
             type:  ui.SublistType.LIST,
-            label: history.length + ' applied / rejected / failed',
+            label: history.length + ' applied / rejected / failed / reversed',
             tab:   'tab_history'
         });
 
@@ -720,12 +851,16 @@ define([
         sbHist.addField({ id: 'hh_applied', type: ui.FieldType.DATE,     label: 'Applied On' });
         sbHist.addField({ id: 'hh_nstxn',   type: ui.FieldType.TEXT,     label: 'NS ID' });
         sbHist.addField({ id: 'hh_error',   type: ui.FieldType.TEXT,     label: 'Error Detail' });
+        sbHist.addField({ id: 'hh_action',  type: ui.FieldType.TEXT,     label: 'Action' });
 
         history.forEach(function (p, i) {
             var isFailed  = p.status === PS.FAILED;
+            var isReversed = p.status === PS.REVERSED;
             var statusLbl = isFailed
                 ? '\u26A0 FAILED'
-                : (STATUS_LABELS[p.status] || p.status || '—');
+                : isReversed
+                    ? '\u21BA REVERSED'
+                    : (STATUS_LABELS[p.status] || p.status || '—');
             // Show the most specific error message available
             var errText   = (p.applyError || p.errorMsg || '').substring(0, 150);
 
@@ -738,6 +873,19 @@ define([
             sbHist.setSublistValue({ id: 'hh_applied', line: i, value: p.appliedDate  || '' });
             sbHist.setSublistValue({ id: 'hh_nstxn',   line: i, value: p.appliedTxnId || '' });
             sbHist.setSublistValue({ id: 'hh_error',   line: i, value: errText });
+
+            // Reverse link — only for Applied proposals with an NS transaction ID
+            if (p.status === PS.APPLIED && p.appliedTxnId) {
+                var reverseUrl = _slUrl({
+                    action:       'reverse_proposal',
+                    proposal_id:  p.id,
+                    bank_account: bankAccountId
+                });
+                sbHist.setSublistValue({ id: 'hh_action', line: i,
+                    value: '<a href="' + reverseUrl + '" style="color:#c62828;">Reverse</a>' });
+            } else {
+                sbHist.setSublistValue({ id: 'hh_action', line: i, value: '' });
+            }
         });
 
         form.addSubmitButton({ label: 'Approve Selected Proposals' });
@@ -837,6 +985,65 @@ define([
             (failed > 0 ? ', ' + failed + ' failed' : '') +
             '. NetSuite transactions are being created.',
             bankAccountId);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  ACTION: Reverse an applied proposal (GET)
+    // ════════════════════════════════════════════════════════════════════════
+
+    function _handleReverseProposal(context, params) {
+        var proposalId   = params.proposal_id;
+        var bankAccountId = params.bank_account || '';
+
+        if (!proposalId) {
+            _redirect(context, 'No proposal ID specified for reversal.', bankAccountId);
+            return;
+        }
+
+        try {
+            var propRec   = record.load({ type: C.RECORDS.PROPOSAL, id: proposalId });
+            var status    = propRec.getValue(PF.STATUS);
+            var txnType   = propRec.getValue(PF.TXN_TYPE);
+            var appliedId = propRec.getValue(PF.APPLIED_TXN_ID);
+
+            if (status !== PS.APPLIED) {
+                _redirect(context, 'Proposal ' + proposalId + ' is not in Applied status — cannot reverse.', bankAccountId);
+                return;
+            }
+            if (!appliedId) {
+                _redirect(context, 'Proposal ' + proposalId + ' has no NS transaction ID — cannot reverse.', bankAccountId);
+                return;
+            }
+
+            // Void the main NS transaction
+            var voidedIds = [];
+            voidedIds.push(engine.voidTransaction(txnType, appliedId));
+
+            // Mark proposal as Reversed
+            record.submitFields({
+                type:    C.RECORDS.PROPOSAL,
+                id:      proposalId,
+                values:  {
+                    [PF.STATUS]:           PS.REVERSED,
+                    [PF.REVERSED_DATE]:    new Date(),
+                    [PF.REVERSED_TXN_IDS]: voidedIds.join(',')
+                },
+                options: { ignoreMandatoryFields: true }
+            });
+
+            log.audit('BM_Main_SL.reverse', 'Proposal ' + proposalId + ' reversed. Voided: ' + voidedIds.join(','));
+
+            _redirect(context,
+                'Proposal ' + proposalId + ' reversed successfully. NS transaction ' +
+                appliedId + ' has been voided.',
+                bankAccountId);
+
+        } catch (e) {
+            log.error('BM_Main_SL.reverse', 'Reversal failed for proposal ' + proposalId + ': ' + e.message);
+            _redirect(context,
+                'Reversal failed for proposal ' + proposalId + ': ' + e.message,
+                bankAccountId);
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -1429,7 +1636,8 @@ define([
         // ── POST ────────────────────────────────────────────────────────────
         if (req.method === 'POST') {
             var postAction = params.custpage_action || params.custpage_action_c || '';
-            var settings0  = _getSettings() || {};
+            var postBankAcct = params.custpage_h_bank_account || '';
+            var settings0  = _getSettings(postBankAcct) || {};
             if (postAction === 'create_manual_multi') {
                 _handleCreateManualMulti(context, settings0, params, req);
             } else if (postAction === 'create_manual') {
@@ -1450,7 +1658,7 @@ define([
             return;
         }
 
-        var settings = _getSettings();
+        var settings = _getSettings(bankAccountId);
         if (!settings) {
             // Redirect to setup if never configured
             context.response.sendRedirect({
@@ -1485,6 +1693,10 @@ define([
 
             case 'create_manual':
                 _handleCreateManual(context, settings, params);
+                break;
+
+            case 'reverse_proposal':
+                _handleReverseProposal(context, params);
                 break;
 
             default:

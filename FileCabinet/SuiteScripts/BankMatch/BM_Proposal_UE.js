@@ -44,27 +44,38 @@ define([
     var BF = C.BODY_FIELD;
     var SF = C.SETTINGS_FIELDS;
 
-    // ── Load full settings from customrecord_bm_settings ─────────────────
+    // ── Load settings for a specific bank account ─────────────────────────
 
-    function _getSettings() {
+    function _getSettings(bankAccountId) {
+        var filters = [['isinactive', 'is', 'F']];
+        if (bankAccountId) {
+            filters.push('AND');
+            filters.push([SF.BANK_ACCOUNT, 'anyof', String(bankAccountId)]);
+        }
         var rows = search.create({
             type:    C.RECORDS.SETTINGS,
-            filters: [['isinactive', 'is', 'F']],
+            filters: filters,
             columns: [
                 SF.BANK_ACCOUNT,
                 SF.FEE_ACCOUNT,
                 SF.SUSPENSE_ACCOUNT,
-                SF.TOLERANCE_AMT
+                SF.TOLERANCE_AMT,
+                SF.DEFAULT_DEPT,
+                SF.DEFAULT_CLASS,
+                SF.DEFAULT_LOCATION
             ]
         }).run().getRange({ start: 0, end: 1 });
 
         if (!rows || !rows.length) return null;
         var r = rows[0];
         return {
-            bankAccount:  r.getValue(SF.BANK_ACCOUNT),
-            feeAccount:   r.getValue(SF.FEE_ACCOUNT)      || '',
-            suspenseAcct: r.getValue(SF.SUSPENSE_ACCOUNT) || '',
-            toleranceAmt: parseFloat(r.getValue(SF.TOLERANCE_AMT)) || 50
+            bankAccount:     r.getValue(SF.BANK_ACCOUNT),
+            feeAccount:      r.getValue(SF.FEE_ACCOUNT)      || '',
+            suspenseAcct:    r.getValue(SF.SUSPENSE_ACCOUNT) || '',
+            toleranceAmt:    parseFloat(r.getValue(SF.TOLERANCE_AMT)) || 50,
+            defaultDept:     r.getValue(SF.DEFAULT_DEPT)     || '',
+            defaultClass:    r.getValue(SF.DEFAULT_CLASS)    || '',
+            defaultLocation: r.getValue(SF.DEFAULT_LOCATION) || ''
         };
     }
 
@@ -145,20 +156,34 @@ define([
             varianceAmt: parseFloat(newRec.getValue(PF.VARIANCE_AMT)) || 0
         };
 
+        // Many-to-one: check if multiple NS IDs are stored
+        var matchedNsIdsStr = '';
+        try { matchedNsIdsStr = newRec.getValue(PF.MATCHED_NS_IDS) || ''; } catch (e) { /* optional */ }
+        var matchedNsIds = matchedNsIdsStr
+            ? matchedNsIdsStr.split(',').map(function (s) { return s.trim(); }).filter(Boolean)
+            : [];
+        var isMultiMatch = matchedNsIds.length > 1;
+
         // Normalized bank reference — written to custbody_bank_transaction_id
         var normRef   = C.normalizeTxnId(proposal.bankRef);
         var errorMsg  = null;
         var appliedId = null;
 
-        // ── Load full settings (needed for Journal Entry GL account and fee account) ──
-        var settings = _getSettings();
+        // ── Load settings for this proposal's bank account ────────────────
+        var proposalBankAcct = newRec.getValue(PF.BANK_ACCT) || '';
+        var settings = _getSettings(proposalBankAcct);
 
         // ── Execute reconciliation ────────────────────────────────────────
         try {
             if (String(proposal.txnType) === String(C.TXN_TYPE.CUSTOMER_PAYMENT)) {
 
-                // Create Customer Payment; engine also creates variance JE if needed
-                appliedId = engine.applyCustomerPayment(proposal, settings);
+                if (isMultiMatch) {
+                    // Many-to-one: apply payment across multiple invoices
+                    appliedId = engine.applyCustomerPaymentMulti(proposal, settings, matchedNsIds);
+                } else {
+                    // Create Customer Payment; engine also creates variance JE if needed
+                    appliedId = engine.applyCustomerPayment(proposal, settings);
+                }
 
                 if (normRef && appliedId) {
                     record.submitFields({
@@ -171,8 +196,13 @@ define([
 
             } else if (String(proposal.txnType) === String(C.TXN_TYPE.VENDOR_PAYMENT)) {
 
-                // Create Vendor Payment; engine also creates variance JE if needed
-                appliedId = engine.applyVendorPayment(proposal, settings);
+                if (isMultiMatch) {
+                    // Many-to-one: apply payment across multiple bills
+                    appliedId = engine.applyVendorPaymentMulti(proposal, settings, matchedNsIds);
+                } else {
+                    // Create Vendor Payment; engine also creates variance JE if needed
+                    appliedId = engine.applyVendorPayment(proposal, settings);
+                }
 
                 if (normRef && appliedId) {
                     record.submitFields({

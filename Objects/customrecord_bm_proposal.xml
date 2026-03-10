@@ -260,6 +260,51 @@
       <helptext>Absolute difference between the bank amount and the NetSuite open balance when a Match with Variance is detected. Posted to the Default Bank Fee Account on approval.</helptext>
     </customrecordcustomfield>
 
+    <!-- ── Reversal tracking ───────────────────────────────────────────────── -->
+
+    <customrecordcustomfield scriptid="custrecord_bm_reversed_date">
+      <fieldtype>DATE</fieldtype>
+      <label>Reversed Date</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Date when this applied proposal was reversed.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_reversed_by">
+      <fieldtype>SELECT</fieldtype>
+      <label>Reversed By</label>
+      <selectrecordtype>-4</selectrecordtype>
+      <ismandatory>F</ismandatory>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Employee who initiated the reversal.</helptext>
+    </customrecordcustomfield>
+
+    <customrecordcustomfield scriptid="custrecord_bm_reversed_txn_ids">
+      <fieldtype>TEXT</fieldtype>
+      <label>Reversed Transaction IDs</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Comma-separated internal IDs of NetSuite transactions that were voided during reversal.</helptext>
+    </customrecordcustomfield>
+
+    <!-- ── Many-to-one matching ──────────────────────────────────────────── -->
+
+    <customrecordcustomfield scriptid="custrecord_bm_prop_matched_ids">
+      <fieldtype>TEXT</fieldtype>
+      <label>Matched NS Record IDs</label>
+      <ismandatory>F</ismandatory>
+      <showinlist>F</showinlist>
+      <isformula>F</isformula>
+      <encryptatrest>F</encryptatrest>
+      <helptext>Comma-separated internal IDs when a single bank line is matched to multiple invoices or bills (many-to-one).</helptext>
+    </customrecordcustomfield>
+
     <!-- ── Bank Account link (for multi-account filtering) ────────────────── -->
 
     <customrecordcustomfield scriptid="custrecord_bm_prop_bank_acct">

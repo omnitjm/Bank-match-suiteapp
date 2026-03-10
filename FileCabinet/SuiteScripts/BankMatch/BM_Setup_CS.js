@@ -5,13 +5,29 @@
  * @NScriptType ClientScript
  *
  * Client-side logic for the Setup page.
- * User selects the Bank Account; subsidiary is derived server-side on save.
+ * When the user selects a different Bank Account, the page reloads to show
+ * that account's saved settings (per-account configuration).
  */
 define(['N/url'], function (url) {
     'use strict';
 
     function pageInit(context) {
         // Nothing needed on load
+    }
+
+    /**
+     * When bank account selection changes, reload the page so the server
+     * loads the saved settings for that specific bank account.
+     */
+    function fieldChanged(context) {
+        if (context.fieldId !== 'custpage_bank_acct_sel') return;
+        var acctId = context.currentRecord.getValue({ fieldId: 'custpage_bank_acct_sel' });
+        window.location.href = url.resolveScript({
+            scriptId:          'customscript_bm_setup_sl',
+            deploymentId:      'customdeploy_bm_setup_sl',
+            returnExternalUrl: false,
+            params:            { sel_account: acctId || '' }
+        });
     }
 
     function goToMain() {
@@ -31,8 +47,9 @@ define(['N/url'], function (url) {
     }
 
     return {
-        pageInit:  pageInit,
-        goToMain:  goToMain,
-        goToRules: goToRules
+        pageInit:     pageInit,
+        fieldChanged: fieldChanged,
+        goToMain:     goToMain,
+        goToRules:    goToRules
     };
 });

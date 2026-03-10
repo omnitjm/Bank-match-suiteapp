@@ -50,28 +50,30 @@ define([
 
     // ── Load settings ────────────────────────────────────────────────────
 
-    function _getSettings() {
-        var rows = search.create({
+    /** Load ALL active settings records (one per bank account). */
+    function _getAllSettings() {
+        var allSettings = [];
+        search.create({
             type:    C.RECORDS.SETTINGS,
             filters: [['isinactive', 'is', 'F']],
             columns: Object.values(SF)
-        }).run().getRange({ start: 0, end: 1 });
-
-        if (!rows || !rows.length) return null;
-        var r = rows[0];
-        return {
-            id:              r.id,
-            bankAccount:     r.getValue(SF.BANK_ACCOUNT),
-            subsidiary:      r.getValue(SF.SUBSIDIARY),
-            toleranceAmt:    parseFloat(r.getValue(SF.TOLERANCE_AMT))   || 50,
-            toleranceDays:   parseInt(r.getValue(SF.TOLERANCE_DAYS), 10) || 5,
-            approver:        r.getValue(SF.APPROVER),
-            feeAccount:      r.getValue(SF.FEE_ACCOUNT)      || '',
-            suspenseAccount: r.getValue(SF.SUSPENSE_ACCOUNT) || '',
-            defaultDept:     r.getValue(SF.DEFAULT_DEPT)     || '',
-            defaultClass:    r.getValue(SF.DEFAULT_CLASS)    || '',
-            defaultLocation: r.getValue(SF.DEFAULT_LOCATION) || ''
-        };
+        }).run().each(function (r) {
+            allSettings.push({
+                id:              r.id,
+                bankAccount:     r.getValue(SF.BANK_ACCOUNT),
+                subsidiary:      r.getValue(SF.SUBSIDIARY),
+                toleranceAmt:    parseFloat(r.getValue(SF.TOLERANCE_AMT))   || 50,
+                toleranceDays:   parseInt(r.getValue(SF.TOLERANCE_DAYS), 10) || 5,
+                approver:        r.getValue(SF.APPROVER),
+                feeAccount:      r.getValue(SF.FEE_ACCOUNT)      || '',
+                suspenseAccount: r.getValue(SF.SUSPENSE_ACCOUNT) || '',
+                defaultDept:     r.getValue(SF.DEFAULT_DEPT)     || '',
+                defaultClass:    r.getValue(SF.DEFAULT_CLASS)    || '',
+                defaultLocation: r.getValue(SF.DEFAULT_LOCATION) || ''
+            });
+            return true;
+        });
+        return allSettings;
     }
 
     // ── Idempotency helpers ───────────────────────────────────────────────
@@ -128,6 +130,13 @@ define([
         propRec.setValue({ fieldId: PF.HAS_VARIANCE,    value: !!matchResult.hasVariance });
         propRec.setValue({ fieldId: PF.VARIANCE_AMT,    value: matchResult.varianceAmt || 0 });
 
+        // Many-to-one: store matched NS record IDs
+        if (matchResult.matchedIds && matchResult.matchedIds.length > 1) {
+            try {
+                propRec.setValue({ fieldId: PF.MATCHED_NS_IDS, value: matchResult.matchedIds.join(',') });
+            } catch (e) { /* optional field */ }
+        }
+
         if (settings && settings.bankAccount) {
             try { propRec.setValue({ fieldId: PF.BANK_ACCT, value: settings.bankAccount }); } catch (e) { /* optional */ }
         }
@@ -142,26 +151,14 @@ define([
         return propRec.save();
     }
 
-    // ── Main execute function ─────────────────────────────────────────────
+    // ── Process one bank account ──────────────────────────────────────────
 
-    function execute(context) {
-        log.audit('BM_Scheduler_SS', 'Scheduled auto-match started');
-
-        var settings = _getSettings();
-        if (!settings) {
-            log.error('BM_Scheduler_SS', 'No Bank Match settings found — skipping run.');
-            return;
-        }
-        if (!settings.bankAccount) {
-            log.error('BM_Scheduler_SS', 'No bank account configured in settings — skipping run.');
-            return;
-        }
-
-        // Read unmatched bank lines
+    function _processAccount(settings) {
         var lineData = reader.getUnmatchedLines(settings.bankAccount);
         var lines    = lineData.lines;
         log.audit('BM_Scheduler_SS',
-            lines.length + ' unmatched line(s) found via source: ' + lineData.source);
+            'Account ' + settings.bankAccount + ': ' +
+            lines.length + ' unmatched line(s) via source: ' + lineData.source);
 
         var created  = 0;
         var skipped  = 0;
@@ -169,7 +166,6 @@ define([
         var reasons  = {};
 
         lines.forEach(function (line) {
-            // Governance: check remaining usage
             var remaining = runtime.getCurrentScript().getRemainingUsage();
             if (remaining < 500) {
                 log.audit('BM_Scheduler_SS',
@@ -178,15 +174,12 @@ define([
             }
 
             var key = _idempotencyKey(line);
-
-            // Skip if a valid proposal already exists for this line
             if (_proposalExists(key)) {
                 skipped++;
                 reasons.existing_proposal = (reasons.existing_proposal || 0) + 1;
                 return;
             }
 
-            // Run waterfall match
             var matchResult = null;
             try {
                 matchResult = engine.runWaterfallMatch(line, settings);
@@ -203,7 +196,6 @@ define([
                 return;
             }
 
-            // Create proposal
             try {
                 _createProposal(line, matchResult, settings, key);
                 created++;
@@ -214,14 +206,52 @@ define([
             }
         });
 
-        log.audit('BM_Scheduler_SS', [
-            'Scheduled auto-match complete.',
-            'Lines: ' + lines.length,
-            'Created: ' + created,
-            'Skipped: ' + skipped,
-            'Errors: ' + errors,
-            'Reasons: ' + JSON.stringify(reasons)
-        ].join(' | '));
+        return { lines: lines.length, created: created, skipped: skipped, errors: errors, reasons: reasons };
+    }
+
+    // ── Main execute function ─────────────────────────────────────────────
+
+    function execute(context) {
+        log.audit('BM_Scheduler_SS', 'Scheduled auto-match started');
+
+        var allSettings = _getAllSettings();
+        if (!allSettings.length) {
+            log.error('BM_Scheduler_SS', 'No Bank Match settings found — skipping run.');
+            return;
+        }
+
+        var totalCreated = 0;
+        var totalLines   = 0;
+
+        allSettings.forEach(function (settings) {
+            if (!settings.bankAccount) {
+                log.audit('BM_Scheduler_SS', 'Settings record ' + settings.id + ' has no bank account — skipping.');
+                return;
+            }
+
+            var remaining = runtime.getCurrentScript().getRemainingUsage();
+            if (remaining < 1000) {
+                log.audit('BM_Scheduler_SS', 'Governance limit approaching — stopping before account ' + settings.bankAccount);
+                return;
+            }
+
+            var result = _processAccount(settings);
+            totalCreated += result.created;
+            totalLines   += result.lines;
+
+            log.audit('BM_Scheduler_SS', [
+                'Account ' + settings.bankAccount + ' complete.',
+                'Lines: ' + result.lines,
+                'Created: ' + result.created,
+                'Skipped: ' + result.skipped,
+                'Errors: ' + result.errors,
+                'Reasons: ' + JSON.stringify(result.reasons)
+            ].join(' | '));
+        });
+
+        log.audit('BM_Scheduler_SS',
+            'Scheduled auto-match complete. Accounts: ' + allSettings.length +
+            ' | Total lines: ' + totalLines + ' | Total created: ' + totalCreated);
     }
 
     return { execute: execute };

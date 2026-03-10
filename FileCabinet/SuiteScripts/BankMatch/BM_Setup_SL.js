@@ -78,12 +78,17 @@ define([
         return { id: '', name: '' };
     }
 
-    // ── Load (or create) the single settings record ────────────────────────
-    function _loadSettings() {
+    // ── Load settings for a specific bank account (or first found) ─────────
+    function _loadSettings(bankAccountId) {
         var cols = Object.values(SF);
+        var filters = [['isinactive', 'is', 'F']];
+        if (bankAccountId) {
+            filters.push('AND');
+            filters.push([SF.BANK_ACCOUNT, 'anyof', String(bankAccountId)]);
+        }
         var result = search.create({
             type:    C.RECORDS.SETTINGS,
-            filters: [['isinactive', 'is', 'F']],
+            filters: filters,
             columns: cols
         }).run().getRange({ start: 0, end: 1 });
 
@@ -372,7 +377,6 @@ define([
     // ── Save settings from POST ───────────────────────────────────────────
     function _saveSettings(params) {
         log.audit('BM_Setup_SL._saveSettings params', JSON.stringify(params));
-        var settingsId  = params.custpage_settings_id;
         var bankAcctId  = parseInt(params['custpage_bank_acct_sel'], 10) || '';
 
         // Derive subsidiary from the selected bank account
@@ -380,6 +384,13 @@ define([
         if (bankAcctId) {
             var sub = _getSubsidiaryForAccount(bankAcctId);
             subId = sub.id ? parseInt(sub.id, 10) : '';
+        }
+
+        // Per-account settings: find existing record for this bank account
+        var settingsId = params.custpage_settings_id || '';
+        if (!settingsId && bankAcctId) {
+            var existing = _loadSettings(bankAcctId);
+            if (existing) settingsId = existing.id;
         }
 
         var rec = settingsId
@@ -409,19 +420,22 @@ define([
         var resp = context.response;
 
         if (req.method === 'POST') {
+            var postedAcct = parseInt(req.parameters['custpage_bank_acct_sel'], 10) || '';
             _saveSettings(req.parameters);
-            // Redirect back to setup with confirmation
+            // Redirect back to setup with confirmation, preserving bank account
             resp.sendRedirect({
                 type:       'SUITELET',
                 identifier: C.SCRIPTS.SETUP_SL,
                 id:         C.SCRIPTS.SETUP_DEPLOY,
-                parameters: { saved: '1' }
+                parameters: { saved: '1', sel_account: postedAcct || '' }
             });
             return;
         }
 
-        var settings = _loadSettings();
-        var form     = _buildForm(settings);
+        // Per-account: load settings for the selected bank account (URL param or first found)
+        var selAccount = req.parameters.sel_account || '';
+        var settings   = selAccount ? _loadSettings(selAccount) : _loadSettings();
+        var form       = _buildForm(settings);
 
         if (req.parameters.saved === '1') {
             form.addPageInitMessage({

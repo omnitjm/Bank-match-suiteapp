@@ -46,11 +46,16 @@ define([
     var TT = C.TXN_TYPE;
     var SR = C.SKIP_REASON;
 
-    // ── Load settings ─────────────────────────────────────────────────────
-    function _getSettings() {
+    // ── Load settings for a bank account ───────────────────────────────────
+    function _getSettings(bankAccountId) {
+        var filters = [['isinactive', 'is', 'F']];
+        if (bankAccountId) {
+            filters.push('AND');
+            filters.push([SF.BANK_ACCOUNT, 'anyof', String(bankAccountId)]);
+        }
         var rows = search.create({
             type:    C.RECORDS.SETTINGS,
-            filters: [['isinactive', 'is', 'F']],
+            filters: filters,
             columns: Object.values(SF)
         }).run().getRange({ start: 0, end: 1 });
 
@@ -160,7 +165,7 @@ define([
     function doGet(params) {
         var action    = params.action  || 'status';
         var accountId = params.account || null;
-        var settings  = _getSettings();
+        var settings  = _getSettings(accountId);
 
         // ── status ────────────────────────────────────────────────────────
         if (action === 'status') {

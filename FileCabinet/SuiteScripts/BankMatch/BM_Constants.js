@@ -113,7 +113,15 @@ define([], function () {
             APPLY_STATUS:    'custrecord_bm_apply_status',     // TEXT – Pending|Processing|Applied|Failed
             APPLY_ATTEMPTS:  'custrecord_bm_apply_attempts',   // INTEGER
             APPLY_ERROR:     'custrecord_bm_apply_error',      // TEXTAREA – last error detail
-            APPLIED_TXN_ID:  'custrecord_bm_applied_txn_id'   // TEXT – NS internal ID on success
+            APPLIED_TXN_ID:  'custrecord_bm_applied_txn_id',  // TEXT – NS internal ID on success
+
+            // ── Reversal tracking ────────────────────────────────────────────
+            REVERSED_DATE:   'custrecord_bm_reversed_date',  // DATE – when reversal happened
+            REVERSED_BY:     'custrecord_bm_reversed_by',    // SELECT → Employee
+            REVERSED_TXN_IDS:'custrecord_bm_reversed_txn_ids', // TEXT – voided NS txn IDs
+
+            // ── Many-to-one matching ──────────────────────────────────────────
+            MATCHED_NS_IDS:  'custrecord_bm_prop_matched_ids' // TEXT – comma-separated NS record IDs for multi-match
         },
 
         // ── Proposal Status List Values ───────────────────────────────────────
@@ -122,7 +130,8 @@ define([], function () {
             APPROVED: '2',
             REJECTED: '3',
             APPLIED:  '4',
-            FAILED:   '5'
+            FAILED:   '5',
+            REVERSED: '6'
         },
 
         // ── Apply Lock Status Values (stored as plain text, not a list) ───────

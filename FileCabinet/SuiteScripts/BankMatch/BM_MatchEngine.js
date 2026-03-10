@@ -246,6 +246,23 @@ define([
         var candidates = _findCandidatesOptimized(bankTxn, settings, recType);
         if (!candidates.length) return null;
 
+        // ── FX conversion: normalize candidate amounts to bank currency ─────
+        var bankCurrency = bankTxn.currency || settings.bankCurrency || '';
+        if (bankCurrency) {
+            candidates.forEach(function (cand) {
+                if (cand.currency && String(cand.currency) !== String(bankCurrency)) {
+                    var converted = convertCurrency(
+                        cand.amount, cand.currency, bankCurrency,
+                        bankTxn.date || new Date()
+                    );
+                    cand.originalAmount   = cand.amount;
+                    cand.originalCurrency = cand.currency;
+                    cand.amount           = Math.abs(converted);
+                    cand.currency         = bankCurrency;
+                }
+            });
+        }
+
         var i, c;
 
         // ── TIER 1: Exact amount + exact document number ──────────────────────
@@ -333,6 +350,61 @@ define([
                     score:       70,
                     matchReason: 'Tier 3: Entity "' + bucket[0].entity +
                                  '" in bank text + single open transaction at exact amount'
+                };
+            }
+        }
+
+        // ── TIER 4: Many-to-one — bank amount matches SUM of multiple open
+        //    transactions for the same entity (consolidated payment) ──────
+        // Group candidates by entity, then check if any subset sums to bankAmt.
+        // Only try combinations up to 5 transactions per entity to limit complexity.
+        var manyToOneBuckets = {};
+        for (i = 0; i < candidates.length; i++) {
+            c = candidates[i];
+            var mtoKey = c.entityId || c.entity;
+            if (!mtoKey) continue;
+            if (!manyToOneBuckets[mtoKey]) manyToOneBuckets[mtoKey] = [];
+            if (manyToOneBuckets[mtoKey].length < 5) manyToOneBuckets[mtoKey].push(c);
+        }
+
+        var mtoKeys = Object.keys(manyToOneBuckets);
+        for (var mi = 0; mi < mtoKeys.length; mi++) {
+            var mtoBucket = manyToOneBuckets[mtoKeys[mi]];
+            if (mtoBucket.length < 2) continue; // need at least 2 for many-to-one
+
+            var bucketSum = 0;
+            for (var bi = 0; bi < mtoBucket.length; bi++) bucketSum += mtoBucket[bi].amount;
+
+            // Check if the sum of ALL open transactions for this entity matches the bank amount
+            if (Math.abs(bucketSum - bankAmt) <= 0.005) {
+                return {
+                    candidate:    mtoBucket[0],
+                    candidates:   mtoBucket,
+                    matchedIds:   mtoBucket.map(function (m) { return m.nsId; }),
+                    tier:         4,
+                    hasVariance:  false,
+                    varianceAmt:  0,
+                    score:        65,
+                    matchReason:  'Tier 4: Many-to-one — ' + mtoBucket.length +
+                                  ' open ' + recType + 's for entity "' +
+                                  mtoBucket[0].entity + '" sum to exact bank amount'
+                };
+            }
+
+            // Check with tolerance
+            if (tolAmt > 0 && Math.abs(bucketSum - bankAmt) <= tolAmt) {
+                return {
+                    candidate:    mtoBucket[0],
+                    candidates:   mtoBucket,
+                    matchedIds:   mtoBucket.map(function (m) { return m.nsId; }),
+                    tier:         4,
+                    hasVariance:  true,
+                    varianceAmt:  Math.abs(bucketSum - bankAmt),
+                    score:        60,
+                    matchReason:  'Tier 4 (with variance ' + Math.abs(bucketSum - bankAmt).toFixed(2) +
+                                  '): Many-to-one — ' + mtoBucket.length +
+                                  ' open ' + recType + 's for entity "' +
+                                  mtoBucket[0].entity + '"'
                 };
             }
         }
@@ -1113,6 +1185,115 @@ define([
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // REVERSAL — void a previously applied NetSuite transaction
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Void a NetSuite transaction (Customer Payment, Vendor Payment, or Journal Entry).
+     * Uses record.Type mapping to determine the correct void approach.
+     *
+     * @param {string} txnType     C.TXN_TYPE value ('1','2','3')
+     * @param {string} txnId       Internal ID of the NS transaction to void
+     * @returns {string}           ID of the voiding transaction (or same ID if voided in place)
+     */
+    function voidTransaction(txnType, txnId) {
+        if (!txnId) throw new Error('No transaction ID provided for reversal');
+
+        var nsRecordType;
+        if (String(txnType) === C.TXN_TYPE.CUSTOMER_PAYMENT)  nsRecordType = record.Type.CUSTOMER_PAYMENT;
+        else if (String(txnType) === C.TXN_TYPE.VENDOR_PAYMENT) nsRecordType = record.Type.VENDOR_PAYMENT;
+        else if (String(txnType) === C.TXN_TYPE.JOURNAL_ENTRY)  nsRecordType = record.Type.JOURNAL_ENTRY;
+        else throw new Error('Cannot void unknown transaction type: ' + txnType);
+
+        // Load the transaction and set it to void status.
+        // For payments, we reverse by loading and setting 'void' on the record.
+        // For JEs, we create a reversing JE.
+        var txn = record.load({ type: nsRecordType, id: parseInt(txnId, 10) });
+        var voidRec;
+        if (String(txnType) === C.TXN_TYPE.JOURNAL_ENTRY) {
+            // Create a reversing JE
+            voidRec = record.copy({ type: nsRecordType, id: parseInt(txnId, 10) });
+            // Swap debit/credit on each line
+            var lineCount = voidRec.getLineCount({ sublistId: 'line' });
+            for (var i = 0; i < lineCount; i++) {
+                var origDebit  = parseFloat(voidRec.getSublistValue({ sublistId: 'line', fieldId: 'debit', line: i })) || 0;
+                var origCredit = parseFloat(voidRec.getSublistValue({ sublistId: 'line', fieldId: 'credit', line: i })) || 0;
+                voidRec.setSublistValue({ sublistId: 'line', fieldId: 'debit',  line: i, value: origCredit });
+                voidRec.setSublistValue({ sublistId: 'line', fieldId: 'credit', line: i, value: origDebit });
+            }
+            voidRec.setValue({ fieldId: 'memo', value: 'Reversal of JE #' + txnId + ' (Bank Match)' });
+            voidRec.setValue({ fieldId: 'trandate', value: new Date() });
+            var reversalId = voidRec.save({ enableSourcing: true, ignoreMandatoryFields: true });
+            log.audit('BM_MatchEngine.voidTransaction',
+                'Created reversing JE ' + reversalId + ' for JE ' + txnId);
+            return String(reversalId);
+        } else {
+            // For Customer Payment / Vendor Payment — use record.delete to void
+            record.delete({ type: nsRecordType, id: parseInt(txnId, 10) });
+            log.audit('BM_MatchEngine.voidTransaction',
+                'Voided ' + nsRecordType + ' ' + txnId);
+            return String(txnId);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // FX RATE LOOKUP
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Get the exchange rate between two currencies for a given date.
+     * Uses N/search to look up the NetSuite currency exchange rate table.
+     *
+     * @param {string|number} fromCurrencyId  Source currency internal ID
+     * @param {string|number} toCurrencyId    Target currency internal ID
+     * @param {Date|string}   effectiveDate   Date for the rate lookup
+     * @returns {number}                      Exchange rate (1.0 if same currency or lookup fails)
+     */
+    function getExchangeRate(fromCurrencyId, toCurrencyId, effectiveDate) {
+        if (!fromCurrencyId || !toCurrencyId) return 1.0;
+        if (String(fromCurrencyId) === String(toCurrencyId)) return 1.0;
+
+        try {
+            var filters = [
+                ['basecurrency',         'anyof', String(fromCurrencyId)], 'AND',
+                ['transactioncurrency',  'anyof', String(toCurrencyId)],   'AND',
+                ['effectivedate',        'onorbefore', effectiveDate]
+            ];
+            var rows = search.create({
+                type:    'currencyrate',
+                filters: filters,
+                columns: [
+                    search.createColumn({ name: 'exchangerate', sort: search.Sort.DESC }),
+                    'effectivedate'
+                ]
+            }).run().getRange({ start: 0, end: 1 });
+
+            if (rows && rows.length) {
+                var rate = parseFloat(rows[0].getValue('exchangerate'));
+                if (rate > 0) return rate;
+            }
+        } catch (e) {
+            log.error('BM_MatchEngine.getExchangeRate',
+                'FX lookup failed (' + fromCurrencyId + '→' + toCurrencyId + '): ' + e.message);
+        }
+        return 1.0;
+    }
+
+    /**
+     * Convert an amount from one currency to another using the NS exchange rate.
+     *
+     * @param {number}        amount          Amount in source currency
+     * @param {string|number} fromCurrencyId  Source currency internal ID
+     * @param {string|number} toCurrencyId    Target currency internal ID
+     * @param {Date|string}   effectiveDate   Date for the rate lookup
+     * @returns {number}                      Converted amount
+     */
+    function convertCurrency(amount, fromCurrencyId, toCurrencyId, effectiveDate) {
+        var rate = getExchangeRate(fromCurrencyId, toCurrencyId, effectiveDate);
+        return amount * rate;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // EXPORTS
     // ─────────────────────────────────────────────────────────────────────────
     return {
@@ -1138,6 +1319,13 @@ define([
 
         // Multi-apply: one bank line → multiple invoices / bills
         applyCustomerPaymentMulti:  applyCustomerPaymentMulti,
-        applyVendorPaymentMulti:    applyVendorPaymentMulti
+        applyVendorPaymentMulti:    applyVendorPaymentMulti,
+
+        // Reversal
+        voidTransaction:            voidTransaction,
+
+        // FX helpers
+        getExchangeRate:            getExchangeRate,
+        convertCurrency:            convertCurrency
     };
 });
