@@ -34,14 +34,13 @@ define([
 
     var SF = C.SETTINGS_FIELDS;
 
-    // ── Bank account helper (bank-type only, filtered by subsidiary) ───────
-    function _getBankAccountsForSubsidiary(subsidiaryId) {
+    // ── All active Bank-type accounts ─────────────────────────────────────
+    function _getAllBankAccounts() {
         var accounts = [];
-
-        function _runSearch(filters) {
+        try {
             search.create({
                 type:    'account',
-                filters: filters,
+                filters: [['type', 'anyof', 'Bank'], 'AND', ['isinactive', 'is', 'F']],
                 columns: ['internalid', 'name', 'acctnumber']
             }).run().each(function (row) {
                 var num  = row.getValue('acctnumber');
@@ -52,28 +51,31 @@ define([
                 });
                 return true;
             });
-        }
-
-        try {
-            // Try subsidiary-filtered search first
-            if (subsidiaryId) {
-                _runSearch([
-                    ['type',       'anyof', 'Bank'], 'AND',
-                    ['isinactive', 'is',    'F'],    'AND',
-                    ['subsidiary', 'anyof', String(subsidiaryId)]
-                ]);
-            }
-            // Fall back to all Bank accounts if nothing found
-            if (accounts.length === 0) {
-                _runSearch([
-                    ['type',       'anyof', 'Bank'], 'AND',
-                    ['isinactive', 'is',    'F']
-                ]);
-            }
         } catch (e) {
-            log.error('BM_Setup_SL._getBankAccountsForSubsidiary', e.message);
+            log.error('BM_Setup_SL._getAllBankAccounts', e.message);
         }
         return accounts;
+    }
+
+    // ── Look up subsidiary for a given bank account ───────────────────────
+    function _getSubsidiaryForAccount(accountId) {
+        if (!accountId) return { id: '', name: '' };
+        try {
+            var results = search.create({
+                type:    'account',
+                filters: [['internalid', 'anyof', String(accountId)]],
+                columns: ['subsidiary']
+            }).run().getRange({ start: 0, end: 1 });
+            if (results && results.length > 0) {
+                return {
+                    id:   results[0].getValue('subsidiary'),
+                    name: results[0].getText('subsidiary')
+                };
+            }
+        } catch (e) {
+            log.error('BM_Setup_SL._getSubsidiaryForAccount', e.message);
+        }
+        return { id: '', name: '' };
     }
 
     // ── Load (or create) the single settings record ────────────────────────
@@ -107,11 +109,7 @@ define([
     }
 
     // ── Build the settings form ────────────────────────────────────────────
-    /**
-     * @param {object|null} settings  - loaded settings record (or null)
-     * @param {string}      selectedSubsidiary  - from URL param custpage_sel_sub
-     */
-    function _buildForm(settings, selectedSubsidiary) {
+    function _buildForm(settings) {
         var form = ui.createForm({ title: 'Bank Match – Setup' });
         form.clientScriptModulePath = './BM_Setup_CS.js';
 
@@ -134,19 +132,7 @@ define([
         });
         grpBank.isBorderHidden = false;
 
-        // 1. Subsidiary FIRST — mandatory — drives bank account list
-        var fldSub = form.addField({
-            id:        SF.SUBSIDIARY,
-            type:      ui.FieldType.SELECT,
-            label:     'Subsidiary',
-            source:    'subsidiary',
-            container: 'grp_bank'
-        });
-        fldSub.isMandatory = true;
-        fldSub.helpText = 'Select a subsidiary first. The Bank Account list will update to show only bank accounts for this subsidiary.';
-
-        // 2. Bank Account — SELECT with options populated server-side
-        //    Only shows accounts of type Bank for the selected subsidiary.
+        // 1. Bank Account — user picks this; subsidiary is derived from it
         var fldAccount = form.addField({
             id:        SF.BANK_ACCOUNT,
             type:      ui.FieldType.SELECT,
@@ -154,21 +140,33 @@ define([
             container: 'grp_bank'
         });
         fldAccount.isMandatory = true;
-        fldAccount.helpText    = 'Only accounts of type "Bank" for the selected subsidiary are shown.';
+        fldAccount.helpText    = 'Select the bank account to reconcile. Subsidiary will be set automatically.';
 
-        var effectiveSub = selectedSubsidiary
-            || (settings && settings.subsidiary)
-            || '';
+        var bankAccounts = _getAllBankAccounts();
+        fldAccount.addSelectOption({ value: '', text: '— Select Bank Account —' });
+        bankAccounts.forEach(function (acct) {
+            fldAccount.addSelectOption({ value: acct.id, text: acct.name });
+        });
 
-        if (effectiveSub) {
-            var bankAccounts = _getBankAccountsForSubsidiary(effectiveSub);
-            fldAccount.addSelectOption({ value: '', text: '— Select Bank Account —' });
-            bankAccounts.forEach(function (acct) {
-                fldAccount.addSelectOption({ value: acct.id, text: acct.name });
-            });
-        } else {
-            fldAccount.addSelectOption({ value: '', text: '— Select Subsidiary first —' });
-        }
+        // 2. Subsidiary — read-only, derived from the saved bank account
+        var savedSub = settings ? _getSubsidiaryForAccount(settings.bankAccount) : { name: '' };
+        var fldSubDisplay = form.addField({
+            id:        'custpage_sub_display',
+            type:      ui.FieldType.TEXT,
+            label:     'Subsidiary',
+            container: 'grp_bank'
+        });
+        fldSubDisplay.updateDisplayType({ displayType: ui.FieldDisplayType.INLINE });
+        fldSubDisplay.defaultValue = savedSub.name || '(saved after selecting bank account)';
+
+        // Hidden field to carry the subsidiary ID through POST
+        var fldSub = form.addField({
+            id:        SF.SUBSIDIARY,
+            type:      ui.FieldType.TEXT,
+            label:     'Subsidiary ID'
+        });
+        fldSub.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
+        fldSub.defaultValue = (settings && settings.subsidiary) ? String(settings.subsidiary) : '';
 
         // ─ Matching Tolerances ──────────────────────────────────────────────
         var grpMatch = form.addFieldGroup({
@@ -351,7 +349,7 @@ define([
                 .updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN })
                 .defaultValue = settings.id;
 
-            fldSub.defaultValue          = effectiveSub || settings.subsidiary;
+            fldSub.defaultValue          = settings.subsidiary ? String(settings.subsidiary) : '';
             fldAccount.defaultValue      = settings.bankAccount;
             fldTolAmt.defaultValue       = settings.tolAmt       || '50.00';
             fldTolDays.defaultValue      = settings.tolDays      || '5';
@@ -375,42 +373,32 @@ define([
 
     // ── Save settings from POST ───────────────────────────────────────────
     function _saveSettings(params) {
-        var settingsId = params.custpage_settings_id;
-        var values = {};
-        values[SF.BANK_ACCOUNT]      = parseInt(params[SF.BANK_ACCOUNT], 10) || '';
-        values[SF.SUBSIDIARY]        = parseInt(params[SF.SUBSIDIARY], 10)   || '';
-        values[SF.TOLERANCE_AMT]     = params[SF.TOLERANCE_AMT];
-        values[SF.TOLERANCE_DAYS]    = params[SF.TOLERANCE_DAYS];
-        values[SF.APPROVER]          = parseInt(params[SF.APPROVER], 10) || '';
-        values[SF.AUTO_SUGGEST]      = params[SF.AUTO_SUGGEST]      || 'F';
-        values[SF.FEE_ACCOUNT]       = params[SF.FEE_ACCOUNT]       || '';
-        values[SF.SUSPENSE_ACCOUNT]  = params[SF.SUSPENSE_ACCOUNT]  || '';
-        values[SF.DEFAULT_DEPT]      = params[SF.DEFAULT_DEPT]      || '';
-        values[SF.DEFAULT_CLASS]     = params[SF.DEFAULT_CLASS]     || '';
-        values[SF.DEFAULT_LOCATION]  = params[SF.DEFAULT_LOCATION]  || '';
-        values[SF.SCHEDULE_TIME]     = params[SF.SCHEDULE_TIME]     || '10:00';
+        var settingsId  = params.custpage_settings_id;
+        var bankAcctId  = parseInt(params[SF.BANK_ACCOUNT], 10) || '';
 
-        // Load or create the record — never use submitFields for bank account because
-        // NS validates the bank account source filter against the subsidiary that is
-        // already on the record at save time.  We must write subsidiary first, then
-        // bank account, so the source filter resolves correctly.
+        // Derive subsidiary from the selected bank account
+        var subId = '';
+        if (bankAcctId) {
+            var sub = _getSubsidiaryForAccount(bankAcctId);
+            subId = sub.id ? parseInt(sub.id, 10) : '';
+        }
+
         var rec = settingsId
             ? record.load({ type: C.RECORDS.SETTINGS, id: settingsId, isDynamic: false })
             : record.create({ type: C.RECORDS.SETTINGS });
 
-        // 1. Subsidiary first — satisfies the bank-account source filter
-        rec.setValue({ fieldId: SF.SUBSIDIARY,   value: values[SF.SUBSIDIARY]   || '' });
-        // 2. Bank account — validated against the subsidiary just set
-        rec.setValue({ fieldId: SF.BANK_ACCOUNT, value: values[SF.BANK_ACCOUNT] || '' });
-        // 3. Remaining fields — order is not sensitive
-        [
-            SF.TOLERANCE_AMT, SF.TOLERANCE_DAYS, SF.APPROVER, SF.AUTO_SUGGEST,
-            SF.FEE_ACCOUNT, SF.SUSPENSE_ACCOUNT,
-            SF.DEFAULT_DEPT, SF.DEFAULT_CLASS, SF.DEFAULT_LOCATION,
-            SF.SCHEDULE_TIME
-        ].forEach(function (fid) {
-            rec.setValue({ fieldId: fid, value: values[fid] || '' });
-        });
+        rec.setValue({ fieldId: SF.SUBSIDIARY,   value: subId      || '' });
+        rec.setValue({ fieldId: SF.BANK_ACCOUNT, value: bankAcctId || '' });
+        rec.setValue({ fieldId: SF.TOLERANCE_AMT,    value: params[SF.TOLERANCE_AMT]    || '' });
+        rec.setValue({ fieldId: SF.TOLERANCE_DAYS,   value: params[SF.TOLERANCE_DAYS]   || '' });
+        rec.setValue({ fieldId: SF.APPROVER,         value: parseInt(params[SF.APPROVER], 10) || '' });
+        rec.setValue({ fieldId: SF.AUTO_SUGGEST,     value: params[SF.AUTO_SUGGEST]     || 'F' });
+        rec.setValue({ fieldId: SF.FEE_ACCOUNT,      value: params[SF.FEE_ACCOUNT]      || '' });
+        rec.setValue({ fieldId: SF.SUSPENSE_ACCOUNT, value: params[SF.SUSPENSE_ACCOUNT] || '' });
+        rec.setValue({ fieldId: SF.DEFAULT_DEPT,     value: params[SF.DEFAULT_DEPT]     || '' });
+        rec.setValue({ fieldId: SF.DEFAULT_CLASS,    value: params[SF.DEFAULT_CLASS]    || '' });
+        rec.setValue({ fieldId: SF.DEFAULT_LOCATION, value: params[SF.DEFAULT_LOCATION] || '' });
+        rec.setValue({ fieldId: SF.SCHEDULE_TIME,    value: params[SF.SCHEDULE_TIME]    || '10:00' });
 
         var savedId = rec.save({ ignoreMandatoryFields: true });
         log.audit('BM_Setup_SL', (settingsId ? 'Settings updated' : 'Settings created') + ', id=' + savedId);
@@ -433,11 +421,8 @@ define([
             return;
         }
 
-        // GET — read selected subsidiary from URL (cascade reload) or saved settings
-        var selectedSubsidiary = req.parameters.custpage_sel_sub || '';
-
         var settings = _loadSettings();
-        var form     = _buildForm(settings, selectedSubsidiary);
+        var form     = _buildForm(settings);
 
         if (req.parameters.saved === '1') {
             form.addPageInitMessage({
