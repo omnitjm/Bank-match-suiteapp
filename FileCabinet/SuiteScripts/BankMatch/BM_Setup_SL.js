@@ -132,21 +132,16 @@ define([
         });
         grpBank.isBorderHidden = false;
 
-        // 1. Bank Account — user picks this; subsidiary is derived from it
+        // 1. Bank Account — native account selector (user can type to search)
         var fldAccount = form.addField({
             id:        SF.BANK_ACCOUNT,
             type:      ui.FieldType.SELECT,
             label:     'Bank Account',
+            source:    'account',
             container: 'grp_bank'
         });
         fldAccount.isMandatory = true;
-        fldAccount.helpText    = 'Select the bank account to reconcile. Subsidiary will be set automatically.';
-
-        var bankAccounts = _getAllBankAccounts();
-        fldAccount.addSelectOption({ value: '', text: '— Select Bank Account —' });
-        bankAccounts.forEach(function (acct) {
-            fldAccount.addSelectOption({ value: acct.id, text: acct.name });
-        });
+        fldAccount.helpText    = 'Select the bank account to reconcile. Subsidiary will be set automatically on save.';
 
         // 2. Subsidiary — read-only, derived from the saved bank account
         var savedSub = settings ? _getSubsidiaryForAccount(settings.bankAccount) : { name: '' };
