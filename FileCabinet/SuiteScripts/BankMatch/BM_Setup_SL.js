@@ -351,7 +351,7 @@ define([
                 .updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN })
                 .defaultValue = settings.id;
 
-            fldSub.defaultValue          = settings.subsidiary;
+            fldSub.defaultValue          = effectiveSub || settings.subsidiary;
             fldAccount.defaultValue      = settings.bankAccount;
             fldTolAmt.defaultValue       = settings.tolAmt       || '50.00';
             fldTolDays.defaultValue      = settings.tolDays      || '5';
