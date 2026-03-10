@@ -37,15 +37,8 @@ define([
     // ── Bank account helper (bank-type only, filtered by subsidiary) ───────
     function _getBankAccountsForSubsidiary(subsidiaryId) {
         var accounts = [];
-        var filters  = [
-            ['type',       'anyof', 'Bank'], 'AND',
-            ['isinactive', 'is',    'F']
-        ];
-        if (subsidiaryId) {
-            filters.push('AND');
-            filters.push(['subsidiary', 'anyof', String(subsidiaryId)]);
-        }
-        try {
+
+        function _runSearch(filters) {
             search.create({
                 type:    'account',
                 filters: filters,
@@ -59,6 +52,24 @@ define([
                 });
                 return true;
             });
+        }
+
+        try {
+            // Try subsidiary-filtered search first
+            if (subsidiaryId) {
+                _runSearch([
+                    ['type',       'anyof', 'Bank'], 'AND',
+                    ['isinactive', 'is',    'F'],    'AND',
+                    ['subsidiary', 'anyof', String(subsidiaryId)]
+                ]);
+            }
+            // Fall back to all Bank accounts if nothing found
+            if (accounts.length === 0) {
+                _runSearch([
+                    ['type',       'anyof', 'Bank'], 'AND',
+                    ['isinactive', 'is',    'F']
+                ]);
+            }
         } catch (e) {
             log.error('BM_Setup_SL._getBankAccountsForSubsidiary', e.message);
         }
