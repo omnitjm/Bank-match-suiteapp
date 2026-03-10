@@ -368,6 +368,7 @@ define([
 
     // ── Save settings from POST ───────────────────────────────────────────
     function _saveSettings(params) {
+        log.audit('BM_Setup_SL._saveSettings params', JSON.stringify(params));
         var settingsId  = params.custpage_settings_id;
         var bankAcctId  = parseInt(params['custpage_bank_acct_sel'], 10) || '';
 
