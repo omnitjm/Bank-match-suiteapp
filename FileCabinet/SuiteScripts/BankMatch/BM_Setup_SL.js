@@ -46,7 +46,7 @@ define([
                 var num  = row.getValue('acctnumber');
                 var name = row.getValue('name');
                 accounts.push({
-                    id:   row.getValue('internalid'),
+                    id:   row.id,
                     name: num ? num + ' ' + name : name
                 });
                 return true;
