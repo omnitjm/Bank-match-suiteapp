@@ -8,17 +8,5 @@
   <notifygroup></notifygroup>
   <notifyowner>T</notifyowner>
   <scriptfile>[/SuiteScripts/BankMatch/BM_Rules_CS.js]</scriptfile>
-  <scriptdeployments>
-    <scriptdeployment scriptid="customdeploy_bm_rules_cs">
-      <allemployees>T</allemployees>
-      <allpartners>F</allpartners>
-      <allroles>T</allroles>
-      <isdeployed>T</isdeployed>
-      <isinactive>F</isinactive>
-      <recordtype>customrecord_bm_rule</recordtype>
-      <loglevel>DEBUG</loglevel>
-      <status>RELEASED</status>
-      <title>BM Rules Client Script</title>
-    </scriptdeployment>
-  </scriptdeployments>
+  <scriptdeployments/>
 </clientscript>

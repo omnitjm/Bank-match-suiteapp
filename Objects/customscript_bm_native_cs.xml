@@ -21,6 +21,7 @@
       <eventtype></eventtype>
       <isdeployed>T</isdeployed>
       <isinactive>F</isinactive>
+      <recordtype>bankstatement</recordtype>
       <loglevel>ERROR</loglevel>
       <status>RELEASED</status>
       <title>BM Native Page Enhancement</title>
