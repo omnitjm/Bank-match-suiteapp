@@ -23,7 +23,6 @@
           <startdate>2026-01-01</startdate>
           <starttime>10:00:00Z</starttime>
           <everyxdays>1</everyxdays>
-          <repeat>T</repeat>
         </daily>
       </recurrence>
     </scriptdeployment>
