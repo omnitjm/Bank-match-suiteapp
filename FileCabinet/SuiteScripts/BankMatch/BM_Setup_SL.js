@@ -132,9 +132,9 @@ define([
         });
         grpBank.isBorderHidden = false;
 
-        // 1. Bank Account — native account selector (user can type to search)
+        // 1. Bank Account — use custpage_ prefix to avoid custom record field validation
         var fldAccount = form.addField({
-            id:        SF.BANK_ACCOUNT,
+            id:        'custpage_bank_acct_sel',
             type:      ui.FieldType.SELECT,
             label:     'Bank Account',
             source:    'account',
@@ -345,7 +345,7 @@ define([
                 .defaultValue = settings.id;
 
             fldSub.defaultValue          = settings.subsidiary ? String(settings.subsidiary) : '';
-            fldAccount.defaultValue      = settings.bankAccount;
+            fldAccount.defaultValue      = settings.bankAccount ? String(settings.bankAccount) : '';
             fldTolAmt.defaultValue       = settings.tolAmt       || '50.00';
             fldTolDays.defaultValue      = settings.tolDays      || '5';
             fldApprover.defaultValue     = settings.approver;
@@ -369,7 +369,7 @@ define([
     // ── Save settings from POST ───────────────────────────────────────────
     function _saveSettings(params) {
         var settingsId  = params.custpage_settings_id;
-        var bankAcctId  = parseInt(params[SF.BANK_ACCOUNT], 10) || '';
+        var bankAcctId  = parseInt(params['custpage_bank_acct_sel'], 10) || '';
 
         // Derive subsidiary from the selected bank account
         var subId = '';
