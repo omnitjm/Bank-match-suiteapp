@@ -108,7 +108,7 @@ define([
         var txnType  = isCredit ? TT.CUSTOMER_PAYMENT : TT.VENDOR_PAYMENT;
         var nsType   = isCredit ? 'invoice'           : 'vendorbill';
 
-        var propRec = record.create({ type: C.RECORDS.PROPOSAL });
+        var propRec = record.create({ type: C.RECORDS.PROPOSAL, isDynamic: true });
         propRec.setValue({ fieldId: PF.TXN_TYPE,        value: txnType });
         propRec.setValue({ fieldId: PF.NS_RECORD_TYPE,  value: nsType });
         propRec.setValue({ fieldId: PF.NS_RECORD_ID,    value: parseInt(cand.nsId, 10) });
@@ -125,7 +125,7 @@ define([
         propRec.setValue({ fieldId: PF.BANK_REF,        value: line.reference || '' });
         propRec.setValue({ fieldId: PF.IDEMPOTENCY_KEY, value: key || '' });
         propRec.setValue({ fieldId: PF.APPLY_STATUS,    value: AS.PENDING });
-        propRec.setValue({ fieldId: PF.HAS_VARIANCE,    value: matchResult.hasVariance ? 'T' : 'F' });
+        propRec.setValue({ fieldId: PF.HAS_VARIANCE,    value: !!matchResult.hasVariance });
         propRec.setValue({ fieldId: PF.VARIANCE_AMT,    value: matchResult.varianceAmt || 0 });
 
         if (settings && settings.bankAccount) {

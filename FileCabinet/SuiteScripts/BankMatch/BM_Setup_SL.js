@@ -143,7 +143,7 @@ define([
         fldAccount.helpText    = 'Select the bank account to reconcile. Subsidiary will be set automatically on save.';
         fldAccount.addSelectOption({ value: '', text: '-- Select Bank Account --' });
         _getAllBankAccounts().forEach(function (acct) {
-            fldAccount.addSelectOption({ value: String(acct.id), text: acct.label });
+            fldAccount.addSelectOption({ value: String(acct.id), text: acct.name });
         });
 
         // 2. Subsidiary — read-only, derived from the saved bank account
@@ -383,8 +383,8 @@ define([
         }
 
         var rec = settingsId
-            ? record.load({ type: C.RECORDS.SETTINGS, id: settingsId, isDynamic: false })
-            : record.create({ type: C.RECORDS.SETTINGS });
+            ? record.load({ type: C.RECORDS.SETTINGS, id: settingsId, isDynamic: true })
+            : record.create({ type: C.RECORDS.SETTINGS, isDynamic: true });
 
         rec.setValue({ fieldId: SF.SUBSIDIARY,   value: subId      || '' });
         rec.setValue({ fieldId: SF.BANK_ACCOUNT, value: bankAcctId || '' });

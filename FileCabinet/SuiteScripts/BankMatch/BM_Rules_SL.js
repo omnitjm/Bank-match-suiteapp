@@ -320,8 +320,8 @@ define([
         var isActive = params.custpage_rule_is_active === 'T' ? true : false;
 
         var rec = ruleId
-            ? record.load({ type: C.RECORDS.RULE, id: ruleId })
-            : record.create({ type: C.RECORDS.RULE });
+            ? record.load({ type: C.RECORDS.RULE, id: ruleId, isDynamic: true })
+            : record.create({ type: C.RECORDS.RULE, isDynamic: true });
 
         rec.setValue({ fieldId: RF.NAME,       value: params.custpage_rule_name      || '' });
         rec.setValue({ fieldId: RF.PRIORITY,   value: parseInt(params.custpage_rule_priority, 10) || 10 });
