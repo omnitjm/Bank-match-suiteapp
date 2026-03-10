@@ -32,6 +32,7 @@ define(['N/url'], function (url) {
             params:            { custpage_sel_sub: subId || '' },
             returnExternalUrl: false
         });
+        window.onbeforeunload = null;
         window.location.href = newUrl;
     }
 
