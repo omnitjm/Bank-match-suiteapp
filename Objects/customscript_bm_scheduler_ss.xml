@@ -20,7 +20,10 @@
            Customization → Scripting → Scripts → BM Scheduler → Deployments -->
       <recurrence>
         <daily>
-          <repeat>1</repeat>
+          <startdate>01/01/2026</startdate>
+          <starttime>10:00 am</starttime>
+          <everyxdays>1</everyxdays>
+          <repeat>F</repeat>
         </daily>
       </recurrence>
     </scriptdeployment>
