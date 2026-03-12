@@ -171,6 +171,55 @@ define([
         fldSub.updateDisplayType({ displayType: ui.FieldDisplayType.HIDDEN });
         fldSub.defaultValue = (settings && settings.subsidiary) ? String(settings.subsidiary) : '';
 
+        // ─ Bank Data Source (Bank Feed) ─────────────────────────────────────
+        var grpFeed = form.addFieldGroup({
+            id:    'grp_feed',
+            label: 'Bank Data Source — Bank Feed (Recommended)'
+        });
+        grpFeed.isBorderHidden = false;
+
+        var feedNote = form.addField({
+            id:        'custpage_feed_note',
+            type:      ui.FieldType.INLINEHTML,
+            label:     ' ',
+            container: 'grp_feed'
+        });
+        feedNote.defaultValue =
+            '<div style="padding:8px 0;color:#333;font-size:12px;line-height:1.6;">' +
+            '<strong style="color:#1565c0;">&#128279; Bank Feed is the recommended way to get bank ' +
+            'transactions into Bank Match.</strong><br>' +
+            'When a bank feed is configured, NetSuite automatically downloads transactions from your ' +
+            'bank daily and loads them into the bank statement import table. Bank Match reads those ' +
+            'lines, proposes matches, and — when you approve — creates the NetSuite transactions and ' +
+            'marks the bank statement lines as reconciled automatically. ' +
+            '<strong>No manual CSV upload or OFX import is required.</strong>' +
+            '<br><br>' +
+            '<strong>How to set up:</strong><br>' +
+            '1. Click <strong>Configure Bank Feed</strong> below to open the NetSuite Bank Feeds page.<br>' +
+            '2. Connect your bank account and enable automatic downloads.<br>' +
+            '3. Return here — new bank statement lines will appear in Bank Match automatically.<br>' +
+            '<br>' +
+            '<em>If your bank does not support a direct feed, you can still upload statements manually ' +
+            'at Transactions &rsaquo; Bank &rsaquo; Banking Import History &rsaquo; Upload File ' +
+            '(CSV, OFX, QFX, or BAI2 format). Bank Match processes manually imported lines identically ' +
+            'to feed lines.</em>' +
+            '</div>' +
+            '<div style="margin:8px 0 4px 0;">' +
+            '<a href="/app/accounting/transactions/bank/reconciliation/bankfeeds.nl" ' +
+            '   target="_blank" ' +
+            '   style="display:inline-block;padding:6px 14px;background:#1565c0;color:#fff;' +
+            '          border-radius:3px;text-decoration:none;font-size:12px;font-weight:600;">' +
+            '&#9881;&nbsp; Configure Bank Feed' +
+            '</a>' +
+            '&nbsp;&nbsp;' +
+            '<a href="/app/accounting/transactions/bank/reconciliation/bankingimporthistory.nl" ' +
+            '   target="_blank" ' +
+            '   style="display:inline-block;padding:6px 14px;background:#546e7a;color:#fff;' +
+            '          border-radius:3px;text-decoration:none;font-size:12px;">' +
+            '&#8679;&nbsp; Upload Statement Manually' +
+            '</a>' +
+            '</div>';
+
         // ─ Matching Tolerances ──────────────────────────────────────────────
         var grpMatch = form.addFieldGroup({
             id:    'grp_match',

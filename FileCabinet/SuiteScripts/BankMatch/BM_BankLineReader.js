@@ -83,8 +83,12 @@ define([
 
     // ── Tier 2: N/search internal record type ─────────────────────────────
     function _readViaSearch(accountId) {
-        var filters = [];
-        if (accountId) filters.push(['account', 'anyof', accountId]);
+        // Only return lines that have not yet been cleared/reconciled
+        var filters = [['iscleared', 'is', 'F']];
+        if (accountId) {
+            filters.push('AND');
+            filters.push(['account', 'anyof', accountId]);
+        }
 
         var results = [];
         try {

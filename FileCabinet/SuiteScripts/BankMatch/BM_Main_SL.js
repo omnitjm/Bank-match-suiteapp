@@ -547,7 +547,18 @@ define([
             'padding:8px 14px;border-radius:4px;margin-bottom:4px;font-size:12px;">' +
             '<strong>Global Overview</strong> — Select a bank account to open its matching workspace. ' +
             'Counts reflect currently unmatched bank lines and pending approval proposals per account.' +
-            '</div>';
+            '<br><span style="color:#555;margin-top:4px;display:inline-block;">' +
+            '&#128279; Bank statement lines are sourced from NetSuite\'s native bank statement import ' +
+            'table (<em>BankStatementImportLine</em>). If a <strong>Bank Feed</strong> is configured ' +
+            'for your bank account, new transactions appear here automatically each day. ' +
+            'If no feed is set up, upload a statement manually at ' +
+            '<a href="/app/accounting/transactions/bank/reconciliation/bankingimporthistory.nl" ' +
+            'target="_blank" style="color:#1565c0;">Banking Import History</a>. ' +
+            'To configure a bank feed, go to ' +
+            '<a href="/app/accounting/transactions/bank/reconciliation/bankfeeds.nl" ' +
+            'target="_blank" style="color:#1565c0;">Bank Feeds</a> or open ' +
+            '<strong>Settings</strong> above.' +
+            '</span></div>';
 
         // ── KPI Dashboard ────────────────────────────────────────────────
         var kpiData = _computeKpis();
