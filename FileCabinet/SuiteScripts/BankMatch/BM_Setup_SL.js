@@ -114,7 +114,7 @@ define([
     }
 
     // ── Build the settings form ────────────────────────────────────────────
-    function _buildForm(settings) {
+    function _buildForm(settings, selectedAccountId) {
         var form = ui.createForm({ title: 'Bank Match – Setup' });
         form.clientScriptModulePath = './BM_Setup_CS.js';
 
@@ -414,6 +414,11 @@ define([
             fldLocation.defaultValue     = settings.defaultLocation  || '';
             fldScheduleTime.defaultValue = settings.scheduleTime     || '10:00';
         } else {
+            // No saved settings yet — but still pre-select the account the user chose
+            // so the dropdown does not snap back to the blank option on reload.
+            if (selectedAccountId) {
+                fldAccount.defaultValue = String(selectedAccountId);
+            }
             fldTolAmt.defaultValue       = '50.00';
             fldTolDays.defaultValue      = '5';
             fldScheduleTime.defaultValue = '10:00';
@@ -484,7 +489,7 @@ define([
         // Per-account: load settings for the selected bank account (URL param or first found)
         var selAccount = req.parameters.sel_account || '';
         var settings   = selAccount ? _loadSettings(selAccount) : _loadSettings();
-        var form       = _buildForm(settings);
+        var form       = _buildForm(settings, selAccount);
 
         if (req.parameters.saved === '1') {
             form.addPageInitMessage({
