@@ -37,23 +37,42 @@ define([
     // ── All active Bank-type accounts ─────────────────────────────────────
     function _getAllBankAccounts() {
         var accounts = [];
-        try {
+
+        function _runSearch(filters) {
             search.create({
                 type:    'account',
-                filters: [['type', 'anyof', 'Bank'], 'AND', ['isinactive', 'is', 'F']],
-                columns: ['internalid', 'name', 'acctnumber']
+                filters: filters,
+                columns: ['name', 'acctnumber', 'type']
             }).run().each(function (row) {
                 var num  = row.getValue('acctnumber');
                 var name = row.getValue('name');
                 accounts.push({
                     id:   row.id,
-                    name: num ? num + ' ' + name : name
+                    name: num ? num + ' – ' + name : name
                 });
                 return true;
             });
-        } catch (e) {
-            log.error('BM_Setup_SL._getAllBankAccounts', e.message);
         }
+
+        // First attempt: Bank-type accounts only (preferred)
+        try {
+            _runSearch([['type', 'anyof', 'Bank'], 'AND', ['isinactive', 'is', 'F']]);
+            log.debug('BM_Setup_SL._getAllBankAccounts', 'Bank-type filter returned ' + accounts.length);
+        } catch (e) {
+            log.error('BM_Setup_SL._getAllBankAccounts (Bank filter)', e.message);
+        }
+
+        // Fallback: if no Bank-type accounts found, return all active accounts so the
+        // dropdown is never empty (user picks the right one manually)
+        if (!accounts.length) {
+            try {
+                _runSearch([['isinactive', 'is', 'F']]);
+                log.debug('BM_Setup_SL._getAllBankAccounts', 'Fallback (all accounts) returned ' + accounts.length);
+            } catch (e2) {
+                log.error('BM_Setup_SL._getAllBankAccounts (fallback)', e2.message);
+            }
+        }
+
         return accounts;
     }
 
