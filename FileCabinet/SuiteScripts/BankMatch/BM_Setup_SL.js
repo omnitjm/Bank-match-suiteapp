@@ -156,19 +156,16 @@ define([
         });
         grpBank.isBorderHidden = false;
 
-        // 1. Bank Account — filtered to Bank-type accounts only (no source= to avoid auto-select of first account)
+        // 1. Bank Account — native source picker (always works regardless of role permissions)
         var fldAccount = form.addField({
             id:        'custpage_bank_acct_sel',
             type:      ui.FieldType.SELECT,
             label:     'Bank Account',
+            source:    'account',
             container: 'grp_bank'
         });
         fldAccount.isMandatory = true;
-        fldAccount.helpText    = 'Select the bank account to reconcile. Subsidiary will be set automatically on save.';
-        fldAccount.addSelectOption({ value: '', text: '-- Select Bank Account --' });
-        _getAllBankAccounts().forEach(function (acct) {
-            fldAccount.addSelectOption({ value: String(acct.id), text: acct.name });
-        });
+        fldAccount.helpText    = 'Select the Bank-type GL account to reconcile. Subsidiary will be set automatically on save.';
 
         // 2. Subsidiary — read-only, derived from the saved bank account
         var savedSub = settings ? _getSubsidiaryForAccount(settings.bankAccount) : { name: '' };
