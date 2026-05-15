@@ -93,9 +93,10 @@ define([
             '(e.g. bank fees, payroll runs) or to skip lines that should never be matched.<br>',
             '<strong>Priority:</strong> lower number = evaluated first. ',
             '<strong>Actions:</strong> ',
-            '<em>Auto Approve</em> — propose + immediately approve; ',
-            '<em>Create Pending</em> — propose (approver reviews); ',
-            '<em>Skip</em> — exclude this line from matching.',
+            '<em>Auto Approve</em> — create a Journal Entry against the configured Suspense Account and immediately approve; ',
+            '<em>Create Pending</em> — same JE but leave for approver review; ',
+            '<em>Skip</em> — exclude this line from matching.<br>',
+            '<strong>Note:</strong> <em>Auto Approve</em> / <em>Create Pending</em> require a Suspense Account in Bank Match Settings.',
             '</div>'
         ].join('');
 
@@ -146,14 +147,17 @@ define([
         var FIELD_LABELS = {
             description: 'Description',
             amount:      'Amount',
-            reference:   'Reference'
+            reference:   'Reference',
+            payee:       'Payee'
         };
         var OP_LABELS = {
             contains:   'contains',
             equals:     '=',
             startswith: 'starts with',
             endswith:   'ends with',
-            regex:      'matches regex'
+            regex:      'matches regex',
+            gte:        '>=',
+            lte:        '<='
         };
 
         var baseUrl = url.resolveScript({
@@ -269,6 +273,7 @@ define([
         fldCondField.addSelectOption({ value: 'description', text: 'Description (bank memo/narrative)' });
         fldCondField.addSelectOption({ value: 'amount',      text: 'Amount (numeric)' });
         fldCondField.addSelectOption({ value: 'reference',   text: 'Reference (bank ref / check number)' });
+        fldCondField.addSelectOption({ value: 'payee',       text: 'Payee (bank counterparty name)' });
         if (rule) fldCondField.defaultValue = rule.condField;
 
         var fldCondOp = form.addField({
@@ -282,6 +287,8 @@ define([
         fldCondOp.addSelectOption({ value: 'startswith', text: 'starts with' });
         fldCondOp.addSelectOption({ value: 'endswith',   text: 'ends with' });
         fldCondOp.addSelectOption({ value: 'regex',      text: 'matches regex' });
+        fldCondOp.addSelectOption({ value: 'gte',        text: 'greater than or equal (amount)' });
+        fldCondOp.addSelectOption({ value: 'lte',        text: 'less than or equal (amount)' });
         if (rule) fldCondOp.defaultValue = rule.condOp;
 
         var fldCondValue = form.addField({

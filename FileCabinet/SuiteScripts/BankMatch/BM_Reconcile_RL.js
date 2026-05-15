@@ -6,9 +6,14 @@
  *
  * Bank Match – RESTlet (kept for backward compatibility and API access).
  *
- * Primary auto-match triggering is now done server-side in BM_Main_SL.js
- * via the "Run Auto-Match" button. This RESTlet provides the same capability
- * via HTTP GET for programmatic / external integrations.
+ * Primary auto-match triggering is done server-side in BM_Main_SL.js via the
+ * "Run Auto-Match" button. This RESTlet provides the same capability via HTTP
+ * GET for programmatic / external integrations and applies the SAME matching
+ * stack as the Suitelet:
+ *   1. Admin reconciliation rules (BM_RulesEngine) — skip / auto-approve /
+ *      create-pending against the configured suspense account.
+ *   2. Waterfall engine (BM_MatchEngine.runWaterfallMatch) — Tier 1 / 2a / 2b
+ *      / 3 / 4 / 4b for everything no rule matched.
  *
  * ─── Endpoints ───────────────────────────────────────────────────────────────
  *   GET  action=status  [account=<glAccountId>]
@@ -36,17 +41,20 @@ define([
     'N/log',
     './BM_Constants',
     './BM_MatchEngine',
-    './BM_BankLineReader'
-], function (record, search, log, C, engine, reader) {
+    './BM_BankLineReader',
+    './BM_RulesEngine'
+], function (record, search, log, C, engine, reader, rulesEngine) {
     'use strict';
 
     var SF = C.SETTINGS_FIELDS;
     var PF = C.PROPOSAL_FIELDS;
     var PS = C.PROPOSAL_STATUS;
     var TT = C.TXN_TYPE;
+    var AS = C.APPLY_STATUS;
     var SR = C.SKIP_REASON;
 
     // ── Load settings ─────────────────────────────────────────────────────
+    // Returns the full settings shape used by the waterfall and rules engines.
     function _getSettings() {
         var rows = search.create({
             type:    C.RECORDS.SETTINGS,
@@ -57,12 +65,14 @@ define([
         if (!rows || !rows.length) return null;
         var r = rows[0];
         return {
-            id:          r.id,
-            bankAccount: r.getValue(SF.BANK_ACCOUNT),
-            subsidiary:  r.getValue(SF.SUBSIDIARY),
-            tolAmt:      parseFloat(r.getValue(SF.TOLERANCE_AMT))   || 0.01,
-            tolDays:     parseInt(r.getValue(SF.TOLERANCE_DAYS), 10) || 5,
-            approver:    r.getValue(SF.APPROVER)
+            id:              r.id,
+            bankAccount:     r.getValue(SF.BANK_ACCOUNT),
+            subsidiary:      r.getValue(SF.SUBSIDIARY),
+            toleranceAmt:    parseFloat(r.getValue(SF.TOLERANCE_AMT))    || 0.01,
+            toleranceDays:   parseInt(r.getValue(SF.TOLERANCE_DAYS), 10) || 5,
+            approver:        r.getValue(SF.APPROVER),
+            feeAccount:      r.getValue(SF.FEE_ACCOUNT)      || '',
+            suspenseAccount: r.getValue(SF.SUSPENSE_ACCOUNT) || ''
         };
     }
 
@@ -123,8 +133,9 @@ define([
         return found;
     }
 
-    // ── Create one proposal record ────────────────────────────────────────
-    function _createProposal(line, cand, settings, idempKey) {
+    // ── Create proposal from a waterfall match result ─────────────────────
+    function _createProposalFromMatch(line, matchResult, settings, idempKey, bankAccountId) {
+        var cand     = matchResult.candidate;
         var isCredit = parseFloat(line.amount) > 0;
         var txnType  = isCredit ? TT.CUSTOMER_PAYMENT : TT.VENDOR_PAYMENT;
         var nsType   = isCredit ? 'invoice'           : 'vendorbill';
@@ -138,13 +149,63 @@ define([
         propRec.setValue({ fieldId: PF.MATCH_DATE,      value: cand.date ? new Date(cand.date) : null });
         propRec.setValue({ fieldId: PF.STATUS,          value: PS.PENDING });
         propRec.setValue({ fieldId: PF.NOTES,
-            value: 'Auto-proposed (score ' + cand.score + ')' });
+            value: matchResult.matchReason + ' (score ' + matchResult.score + ')' });
         propRec.setValue({ fieldId: PF.BANK_AMOUNT,     value: line.amount });
         propRec.setValue({ fieldId: PF.BANK_DATE,       value: line.date ? new Date(line.date) : null });
         propRec.setValue({ fieldId: PF.BANK_REF,        value: line.reference || '' });
         propRec.setValue({ fieldId: PF.IDEMPOTENCY_KEY, value: idempKey || '' });
-        propRec.setValue({ fieldId: PF.APPLY_STATUS,    value: C.APPLY_STATUS.PENDING });
+        propRec.setValue({ fieldId: PF.APPLY_STATUS,    value: AS.PENDING });
+        propRec.setValue({ fieldId: PF.HAS_VARIANCE,
+            value: matchResult.hasVariance ? 'T' : 'F' });
+        propRec.setValue({ fieldId: PF.VARIANCE_AMT,
+            value: matchResult.varianceAmt || 0 });
 
+        if (bankAccountId) {
+            try { propRec.setValue({ fieldId: PF.BANK_ACCT, value: bankAccountId }); } catch (e) { /* optional */ }
+        }
+        try {
+            propRec.setValue({ fieldId: PF.BANK_LINE_ID, value: String(line.id) });
+        } catch (e) { /* optional field */ }
+
+        if (settings && settings.approver) {
+            propRec.setValue({ fieldId: PF.APPROVER, value: settings.approver });
+        }
+
+        return propRec.save();
+    }
+
+    // ── Create JE-type proposal from a fired admin rule ───────────────────
+    function _createRuleProposal(line, ruleHit, settings, idempKey, bankAccountId) {
+        if (!settings.suspenseAccount) {
+            throw new Error(
+                'Rule "' + ruleHit.rule.name + '" matched but no Suspense Account ' +
+                'is configured in Bank Match Settings — cannot auto-create a JE proposal.'
+            );
+        }
+        var propRec = record.create({ type: C.RECORDS.PROPOSAL });
+        propRec.setValue({ fieldId: PF.TXN_TYPE,        value: TT.JOURNAL_ENTRY });
+        propRec.setValue({ fieldId: PF.NS_RECORD_TYPE,  value: 'account' });
+        propRec.setValue({ fieldId: PF.NS_RECORD_ID,    value: parseInt(settings.suspenseAccount, 10) });
+        propRec.setValue({ fieldId: PF.NS_RECORD_REF,
+            value: 'Suspense (rule: ' + ruleHit.rule.name + ')' });
+        propRec.setValue({ fieldId: PF.MATCH_AMOUNT,    value: Math.abs(parseFloat(line.amount) || 0) });
+        propRec.setValue({ fieldId: PF.MATCH_DATE,      value: line.date ? new Date(line.date) : null });
+        propRec.setValue({ fieldId: PF.STATUS,
+            value: ruleHit.action === 'auto_approve' ? PS.APPROVED : PS.PENDING });
+        propRec.setValue({ fieldId: PF.NOTES,
+            value: 'Rule "' + ruleHit.rule.name + '" matched (priority ' +
+                   ruleHit.rule.priority + ') → ' + ruleHit.action });
+        propRec.setValue({ fieldId: PF.BANK_AMOUNT,     value: line.amount });
+        propRec.setValue({ fieldId: PF.BANK_DATE,       value: line.date ? new Date(line.date) : null });
+        propRec.setValue({ fieldId: PF.BANK_REF,        value: line.reference || '' });
+        propRec.setValue({ fieldId: PF.IDEMPOTENCY_KEY, value: idempKey || '' });
+        propRec.setValue({ fieldId: PF.APPLY_STATUS,    value: AS.PENDING });
+        propRec.setValue({ fieldId: PF.HAS_VARIANCE,    value: 'F' });
+        propRec.setValue({ fieldId: PF.VARIANCE_AMT,    value: 0 });
+
+        if (bankAccountId) {
+            try { propRec.setValue({ fieldId: PF.BANK_ACCT, value: bankAccountId }); } catch (e) { /* optional */ }
+        }
         try {
             propRec.setValue({ fieldId: PF.BANK_LINE_ID, value: String(line.id) });
         } catch (e) { /* optional field */ }
@@ -195,7 +256,12 @@ define([
             var total     = allLines.length;
             var page      = allLines.slice(offset, offset + limit);
 
+            // Load admin-defined rules once per request
+            var rules = rulesEngine.load(settings);
+
             var created        = 0;
+            var ruleHits       = 0;
+            var autoApproved   = 0;
             var skipped        = 0;
             var skippedReasons = {};
 
@@ -212,18 +278,40 @@ define([
                     return;
                 }
 
-                var isCredit   = parseFloat(line.amount) > 0;
-                var candidates = isCredit
-                    ? engine.findInvoiceMatches(line, settings)
-                    : engine.findVendorBillMatches(line, settings);
+                // Step 1 — admin rules win over the waterfall engine
+                if (rules.count > 0) {
+                    var hit = rules.evaluate(line);
+                    if (hit) {
+                        if (hit.action === 'skip') {
+                            _addSkip(SR.NO_CANDIDATE);
+                            return;
+                        }
+                        if (hit.action === 'auto_approve' || hit.action === 'create_pending') {
+                            try {
+                                _createRuleProposal(line, hit, settings, key, effectiveAccount);
+                                created++;
+                                ruleHits++;
+                                if (hit.action === 'auto_approve') autoApproved++;
+                                return;
+                            } catch (ruleErr) {
+                                log.error('BM_Reconcile_RL.propose_all',
+                                    'Rule "' + hit.rule.name + '" failed on line ' + line.id +
+                                    ': ' + ruleErr.message);
+                                // Fall through to waterfall match
+                            }
+                        }
+                    }
+                }
 
-                if (!candidates.length || candidates[0].score < 40) {
+                // Step 2 — waterfall match (Tiers 1 / 2a / 2b / 3 / 4 / 4b)
+                var matchResult = engine.runWaterfallMatch(line, settings);
+                if (!matchResult) {
                     _addSkip(SR.NO_CANDIDATE);
                     return;
                 }
 
                 try {
-                    _createProposal(line, candidates[0], settings, key);
+                    _createProposalFromMatch(line, matchResult, settings, key, effectiveAccount);
                     created++;
                 } catch (e) {
                     log.error('BM_Reconcile_RL.propose_all',
@@ -237,18 +325,23 @@ define([
 
             log.audit('BM_Reconcile_RL',
                 'propose_all offset=' + offset + ' limit=' + limit +
-                ' created=' + created + ' skipped=' + skipped + ' done=' + done);
+                ' created=' + created + ' (rules ' + ruleHits + ', auto-approved ' +
+                autoApproved + ') skipped=' + skipped + ' done=' + done);
 
             return JSON.stringify({
                 ok:             true,
                 processed:      page.length,
                 created:        created,
+                ruleHits:       ruleHits,
+                autoApproved:   autoApproved,
                 skipped:        skipped,
                 skippedReasons: skippedReasons,
                 nextOffset:     done ? null : nextOffset,
                 done:           done,
                 pendingCount:   _countPending(),
-                message:        created + ' proposal(s) created, ' + skipped + ' skipped.'
+                message:        created + ' proposal(s) created' +
+                                (ruleHits ? ' (' + ruleHits + ' by rules)' : '') +
+                                ', ' + skipped + ' skipped.'
             });
         }
 

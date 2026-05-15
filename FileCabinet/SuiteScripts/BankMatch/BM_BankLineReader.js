@@ -32,7 +32,13 @@ define([
     var BTF = C.BANK_TXN_FIELDS;
 
     // ── Normalise a row into a consistent shape ────────────────────────────
+    // payee / counterparty / name fields are kept separately because they are
+    // the single strongest signal for entity-based matching (Tier 4 in the
+    // waterfall engine).  The native NetSuite BankStatementImportLine record
+    // carries them in `name`, `customername`, or `payee` depending on the
+    // source (OFX vs BAI2 vs CSV).
     function _norm(o) {
+        var payee = o.payee || o.customername || o.name || '';
         return {
             id:          String(o.id || ''),
             date:        o.date        || o.trandate     || '',
@@ -41,6 +47,7 @@ define([
             reference:   o.reference   || o.fitid        || o.fitId || '',
             currency:    o.currency    || 'USD',
             status:      o.status      || C.TXN_STATUS.UNMATCHED,
+            payee:       String(payee || '').trim(),
             source:      o._source     || 'custom'   // 'native' | 'custom'
         };
     }
@@ -51,33 +58,52 @@ define([
             ? "account = '" + accountId + "' AND iscleared = 'F'"
             : "iscleared = 'F'";
 
-        var sql = [
-            'SELECT id, trandate, memo, amount, currency, fitid, name',
-            'FROM BankStatementImportLine',
-            'WHERE ' + where,
-            'ORDER BY trandate DESC'
-        ].join(' ');
+        // Try enriched query first (includes `customername` which is present on
+        // BAI2 / proprietary feeds).  If that column is not exposed in this
+        // NetSuite account, fall back to a base query that only uses `name`
+        // (the OFX/QFX counterparty column, which is universally present).
+        var enriched = 'SELECT id, trandate, memo, amount, currency, fitid, name, customername ' +
+                       'FROM BankStatementImportLine WHERE ' + where + ' ORDER BY trandate DESC';
+        var basic    = 'SELECT id, trandate, memo, amount, currency, fitid, name ' +
+                       'FROM BankStatementImportLine WHERE ' + where + ' ORDER BY trandate DESC';
 
-        var results = [];
-        try {
+        function _runSql(sql, hasCustomerName) {
+            var rows = [];
             var rs = query.runSuiteQL({ query: sql });
             rs.results.forEach(function (row) {
                 var cols = row.values;
-                results.push(_norm({
-                    id:          cols[0],
-                    date:        cols[1],
-                    description: cols[2] || cols[6], // memo or name
-                    amount:      cols[3],
-                    currency:    cols[4],
-                    reference:   cols[5],            // fitid
-                    _source:     'native'
+                rows.push(_norm({
+                    id:           cols[0],
+                    date:         cols[1],
+                    description:  cols[2] || cols[6], // memo or name
+                    amount:       cols[3],
+                    currency:     cols[4],
+                    reference:    cols[5],            // fitid
+                    name:         cols[6],            // OFX counterparty
+                    customername: hasCustomerName ? cols[7] : '',
+                    _source:      'native'
                 }));
             });
-            log.debug('BM_BankLineReader', 'Tier1 (SuiteQL) returned ' + results.length + ' lines');
-            return results.length ? results : null;
-        } catch (e) {
-            log.debug('BM_BankLineReader', 'Tier1 failed: ' + e.message);
-            return null;
+            return rows;
+        }
+
+        try {
+            var enrichedRows = _runSql(enriched, true);
+            log.debug('BM_BankLineReader',
+                'Tier1 (SuiteQL+payee) returned ' + enrichedRows.length + ' lines');
+            return enrichedRows.length ? enrichedRows : null;
+        } catch (e1) {
+            log.debug('BM_BankLineReader',
+                'Tier1 enriched failed (' + e1.message + ') — retrying without customername');
+            try {
+                var basicRows = _runSql(basic, false);
+                log.debug('BM_BankLineReader',
+                    'Tier1 (SuiteQL basic) returned ' + basicRows.length + ' lines');
+                return basicRows.length ? basicRows : null;
+            } catch (e2) {
+                log.debug('BM_BankLineReader', 'Tier1 failed entirely: ' + e2.message);
+                return null;
+            }
         }
     }
 
@@ -103,6 +129,7 @@ define([
                     amount:      row.getValue('amount'),
                     currency:    row.getValue('currency'),
                     reference:   row.getValue('fitid'),
+                    name:        row.getValue('name'),   // OFX counterparty → payee
                     _source:     'native'
                 }));
                 return results.length < 500;

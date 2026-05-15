@@ -39,7 +39,9 @@
  *   custpage_action=create_manual      → _handleCreateManual (Option C)
  *
  * ─── Matching Engine ──────────────────────────────────────────────────────────
- * Auto-match now uses engine.runWaterfallMatch (Tier 1 / 2a / 2b / 3).
+ * Auto-match evaluates admin-defined reconciliation rules first (via
+ * BM_RulesEngine) and falls through to engine.runWaterfallMatch
+ * (Tier 1 / 2a / 2b / 3 / 4 / 4b) for lines no rule matched.
  * Variance metadata (hasVariance, varianceAmt) is stored in every proposal.
  * On approval, BM_Proposal_UE reads variance fields and calls applyCustomerPayment
  * / applyVendorPayment with full settings so the fee-account JE is created.
@@ -54,8 +56,9 @@ define([
     'N/log',
     './BM_Constants',
     './BM_MatchEngine',
-    './BM_BankLineReader'
-], function (ui, record, search, url, log, C, engine, reader) {
+    './BM_BankLineReader',
+    './BM_RulesEngine'
+], function (ui, record, search, url, log, C, engine, reader, rulesEngine) {
     'use strict';
 
     var SF = C.SETTINGS_FIELDS;
@@ -745,7 +748,64 @@ define([
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  ACTION: Run Auto-Match (waterfall engine)
+    //  Rule-based proposal helper
+    // ════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Create a Journal-Entry-type proposal for a bank line that was matched by
+     * a reconciliation rule (BM_RulesEngine). The proposal targets the
+     * configured suspense GL account so the User Event script can post the JE
+     * automatically when the proposal is approved.
+     *
+     * Returns the new proposal's internal ID, or throws if settings/suspense
+     * are not configured.
+     */
+    function _createRuleProposal(line, ruleHit, settings, key, bankAccountId) {
+        if (!settings.suspenseAccount) {
+            throw new Error(
+                'Rule "' + ruleHit.rule.name + '" matched but no Suspense Account ' +
+                'is configured in Bank Match Settings — cannot auto-create a JE proposal.'
+            );
+        }
+
+        var propRec = record.create({ type: C.RECORDS.PROPOSAL });
+        propRec.setValue({ fieldId: PF.TXN_TYPE,        value: TT.JOURNAL_ENTRY });
+        propRec.setValue({ fieldId: PF.NS_RECORD_TYPE,  value: 'account' });
+        propRec.setValue({ fieldId: PF.NS_RECORD_ID,    value: parseInt(settings.suspenseAccount, 10) });
+        propRec.setValue({ fieldId: PF.NS_RECORD_REF,   value: 'Suspense (rule: ' + ruleHit.rule.name + ')' });
+        propRec.setValue({ fieldId: PF.MATCH_AMOUNT,    value: Math.abs(parseFloat(line.amount) || 0) });
+        propRec.setValue({ fieldId: PF.MATCH_DATE,
+            value: line.date ? new Date(line.date) : null });
+        propRec.setValue({ fieldId: PF.STATUS,
+            value: ruleHit.action === 'auto_approve' ? PS.APPROVED : PS.PENDING });
+        propRec.setValue({ fieldId: PF.NOTES,
+            value: 'Rule "' + ruleHit.rule.name + '" matched (priority ' +
+                   ruleHit.rule.priority + ') → ' + ruleHit.action });
+        propRec.setValue({ fieldId: PF.BANK_AMOUNT,     value: line.amount });
+        propRec.setValue({ fieldId: PF.BANK_DATE,
+            value: line.date ? new Date(line.date) : null });
+        propRec.setValue({ fieldId: PF.BANK_REF,        value: line.reference || '' });
+        propRec.setValue({ fieldId: PF.IDEMPOTENCY_KEY, value: key || '' });
+        propRec.setValue({ fieldId: PF.APPLY_STATUS,    value: AS.PENDING });
+        propRec.setValue({ fieldId: PF.HAS_VARIANCE,    value: 'F' });
+        propRec.setValue({ fieldId: PF.VARIANCE_AMT,    value: 0 });
+
+        if (bankAccountId) {
+            try { propRec.setValue({ fieldId: PF.BANK_ACCT, value: bankAccountId }); } catch (e) { /* optional */ }
+        }
+        try {
+            propRec.setValue({ fieldId: PF.BANK_LINE_ID, value: String(line.id) });
+        } catch (e) { /* optional field */ }
+
+        if (settings && settings.approver) {
+            propRec.setValue({ fieldId: PF.APPROVER, value: settings.approver });
+        }
+
+        return propRec.save();
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  ACTION: Run Auto-Match (rules + waterfall engine)
     // ════════════════════════════════════════════════════════════════════════
 
     function _handleRunAutoMatch(context, settings, params) {
@@ -756,11 +816,12 @@ define([
 
         // Build per-account settings (subsidiary override for this account)
         var runSettings = {
-            toleranceAmt:  settings.toleranceAmt,
-            toleranceDays: settings.toleranceDays,
-            subsidiary:    subsidiaryId || settings.subsidiary,
-            feeAccount:    settings.feeAccount,
-            approver:      settings.approver
+            toleranceAmt:    settings.toleranceAmt,
+            toleranceDays:   settings.toleranceDays,
+            subsidiary:      subsidiaryId || settings.subsidiary,
+            feeAccount:      settings.feeAccount,
+            suspenseAccount: settings.suspenseAccount,
+            approver:        settings.approver
         };
 
         var lineData = reader.getUnmatchedLines(bankAccountId);
@@ -776,16 +837,49 @@ define([
             });
         }
 
-        var created = 0;
-        var skipped = 0;
+        // Load admin-defined reconciliation rules once for this run
+        var rules = rulesEngine.load(runSettings);
+
+        var created    = 0;
+        var ruleHits   = 0;
+        var autoApproved = 0;
+        var ruleSkipped = 0;
+        var skipped    = 0;
 
         allLines.forEach(function (line) {
             var key = _idempotencyKey(line);
             if (_proposalExists(key)) { skipped++; return; }
 
-            // Run waterfall match (Tiers 1 / 2a / 2b / 3)
-            var matchResult = engine.runWaterfallMatch(line, runSettings);
+            // Step 1 — admin rules win over the waterfall engine
+            if (rules.count > 0) {
+                var hit = rules.evaluate(line);
+                if (hit) {
+                    if (hit.action === 'skip') {
+                        log.debug('BM_Main_SL.run_automatch',
+                            'Line ' + line.id + ' SKIPPED by rule "' + hit.rule.name + '"');
+                        ruleSkipped++;
+                        skipped++;
+                        return;
+                    }
+                    if (hit.action === 'auto_approve' || hit.action === 'create_pending') {
+                        try {
+                            _createRuleProposal(line, hit, runSettings, key, bankAccountId);
+                            created++;
+                            ruleHits++;
+                            if (hit.action === 'auto_approve') autoApproved++;
+                            return;
+                        } catch (ruleErr) {
+                            log.error('BM_Main_SL.run_automatch',
+                                'Rule "' + hit.rule.name + '" failed on line ' + line.id +
+                                ': ' + ruleErr.message);
+                            // Fall through to the waterfall engine
+                        }
+                    }
+                }
+            }
 
+            // Step 2 — waterfall match (Tiers 1 / 2a / 2b / 3 / 4 / 4b)
+            var matchResult = engine.runWaterfallMatch(line, runSettings);
             if (!matchResult) { skipped++; return; }
 
             try {
@@ -799,13 +893,23 @@ define([
 
         log.audit('BM_Main_SL.run_automatch',
             'Bank account ' + bankAccountId + ': processed ' + allLines.length + ' lines — ' +
-            created + ' proposals created, ' + skipped + ' skipped.');
+            created + ' proposals created (' + ruleHits + ' by rules, ' + autoApproved +
+            ' auto-approved), ' + skipped + ' skipped (' + ruleSkipped + ' by rules).');
 
-        _redirect(context,
-            created + ' proposal(s) created from ' + allLines.length + ' bank line(s). ' +
-            skipped + ' skipped.' +
-            (created > 0 ? ' Review them in the Pending Approvals tab.' : ''),
-            bankAccountId);
+        var msg = created + ' proposal(s) created from ' + allLines.length + ' bank line(s). ' +
+                  skipped + ' skipped.';
+        if (ruleHits > 0) {
+            msg += ' ' + ruleHits + ' matched by reconciliation rule(s)' +
+                   (autoApproved > 0 ? ' (' + autoApproved + ' auto-approved)' : '') + '.';
+        }
+        if (ruleSkipped > 0) {
+            msg += ' ' + ruleSkipped + ' line(s) skipped by rule.';
+        }
+        if (created > 0) {
+            msg += ' Review them in the Pending Approvals tab.';
+        }
+
+        _redirect(context, msg, bankAccountId);
     }
 
     // ════════════════════════════════════════════════════════════════════════

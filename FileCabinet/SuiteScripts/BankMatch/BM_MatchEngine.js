@@ -8,11 +8,15 @@
  * NEW in this version:
  *   - Data sanitization (sanitizeMemo, extractNumericParts) — strips noise
  *     words (Invoice, INV, Faktura, Payment, Nets …) and extracts raw numbers.
- *   - Waterfall matching (runWaterfallMatch) with three tiers:
+ *   - Waterfall matching (runWaterfallMatch) with four tiers:
  *       Tier 1  – Exact amount + exact document number in memo  → score 100
  *       Tier 2a – Exact amount + numeric doc-ID part in memo    → score 90
  *       Tier 2b – Numeric doc-ID match, amount within tolerance → score 80, hasVariance
- *       Tier 3  – Entity name in memo + single matching amount  → score 70
+ *       Tier 3  – Entity name (substring OR token-set) in memo
+ *                  + single matching amount                     → score 70
+ *       Tier 4  – Bank payee → customer/vendor lookup +
+ *                  single open txn at matching amount           → score 65
+ *       Tier 4b – Tier 4 + amount within tolerance              → score 60, hasVariance
  *   - Tolerance/Variance flagging: hasVariance + varianceAmt on every result.
  *   - Optimized N/search: loads ONLY candidates matching by amount±tolerance
  *     OR by tranid containing memo numeric parts — never all open transactions.
@@ -98,6 +102,119 @@ define([
         if (!tranid) return '';
         var nums = String(tranid).match(/\d+/g);
         return nums ? nums[nums.length - 1] : '';
+    }
+
+    /**
+     * Tokenize a sanitized string into significant tokens (≥3 chars, alphabetic).
+     * Used by Tier 3 entity-name matching to handle multi-word names where
+     * substring `indexOf` would miss reorderings (e.g. "Acme Ltd" in bank text
+     * vs "Ltd, Acme" in NS entity name).
+     *
+     * @param  {string}   text  already sanitized lowercase text
+     * @returns {string[]}      e.g. ['acme','consulting']
+     */
+    function _entityTokens(text) {
+        if (!text) return [];
+        var out = [];
+        String(text).split(/\s+/).forEach(function (tok) {
+            // Drop pure digits, very short tokens, and entity-suffix noise that
+            // sanitizeMemo already strips but may slip through entity names
+            // when sanitizeMemo is not called on them (legal suffixes vary by
+            // jurisdiction; keep this conservative).
+            if (tok.length < 3) return;
+            if (/^\d+$/.test(tok)) return;
+            out.push(tok);
+        });
+        return out;
+    }
+
+    /**
+     * Return true if every entity token (length ≥3, non-numeric) is present in
+     * the sanitized bank text.  Order-independent.
+     */
+    function _allTokensMatch(entityName, cleanText) {
+        var tokens = _entityTokens(sanitizeMemo(entityName));
+        if (!tokens.length) return false;
+        for (var i = 0; i < tokens.length; i++) {
+            if (cleanText.indexOf(tokens[i]) < 0) return false;
+        }
+        return true;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // PAYEE → ENTITY LOOKUP   (Tier 4 helper)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Look up a customer or vendor by the bank-line payee field.
+     * Tries exact match on companyname/entityid first, then falls back to a
+     * "starts with" search on the first significant token.  Returns at most
+     * one entity — if multiple match, returns null (ambiguous).
+     *
+     * @param {string}  payee       Raw payee text from the bank line
+     * @param {string}  entityType  'customer' | 'vendor'
+     * @param {string|number} [subsidiaryId]  Optional subsidiary filter
+     * @returns {string|null}       Entity internal ID or null
+     */
+    function _findEntityByPayee(payee, entityType, subsidiaryId) {
+        var raw = String(payee || '').trim();
+        if (raw.length < 3) return null;
+
+        // Subsidiary filter is silently ignored if the field isn't searchable
+        // on this entity type (e.g. in single-subsidiary accounts).
+        function _trySearch(filters) {
+            var ids = [];
+            try {
+                search.create({
+                    type:    entityType,
+                    filters: filters,
+                    columns: ['internalid']
+                }).run().each(function (row) {
+                    ids.push(row.getValue('internalid'));
+                    return ids.length < 5;
+                });
+            } catch (e) {
+                log.debug('BM_MatchEngine._findEntityByPayee',
+                    entityType + ' lookup failed: ' + e.message);
+            }
+            return ids;
+        }
+
+        // 1. Exact match on companyname or entityid
+        var exactFilters = [
+            ['isinactive', 'is', 'F'], 'AND',
+            [
+                ['companyname', 'is', raw], 'OR',
+                ['entityid',    'is', raw]
+            ]
+        ];
+        if (subsidiaryId) {
+            exactFilters.push('AND');
+            exactFilters.push(['subsidiary', 'anyof', String(subsidiaryId)]);
+        }
+        var exact = _trySearch(exactFilters);
+        if (exact.length === 1) return exact[0];
+        if (exact.length > 1)   return null;
+
+        // 2. "Starts with" on the first ≥3-char token
+        var firstToken = _entityTokens(sanitizeMemo(raw))[0];
+        if (!firstToken) return null;
+
+        var fuzzyFilters = [
+            ['isinactive', 'is', 'F'], 'AND',
+            [
+                ['companyname', 'startswith', firstToken], 'OR',
+                ['entityid',    'startswith', firstToken]
+            ]
+        ];
+        if (subsidiaryId) {
+            fuzzyFilters.push('AND');
+            fuzzyFilters.push(['subsidiary', 'anyof', String(subsidiaryId)]);
+        }
+        var fuzzy = _trySearch(fuzzyFilters);
+        // Only accept the fuzzy match if it's unambiguous
+        if (fuzzy.length === 1) return fuzzy[0];
+        return null;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -218,13 +335,25 @@ define([
      *            from the open balance by ≤ toleranceAmt ("Match with Variance").
      *            → score 80, hasVariance true, varianceAmt = abs(diff)
      *
-     * Tier 3  – The entity name (customer/vendor) appears verbatim in the
-     *            sanitized bank text AND there is EXACTLY ONE open transaction
-     *            for that entity matching the exact bank amount.
+     * Tier 3  – The entity name (customer/vendor) appears in the sanitized
+     *            bank text as either a substring OR as the union of its
+     *            non-numeric tokens (≥3 chars) AND there is EXACTLY ONE open
+     *            transaction for that entity matching the exact bank amount.
      *            The "exactly one" requirement prevents false positives.
      *            → score 70, hasVariance false
      *
-     * @param {Object} bankTxn   { date, amount, description, reference }
+     * Tier 4  – The bank line's structured `payee` field resolves
+     *            unambiguously to a single customer/vendor (exact name match,
+     *            or single fuzzy "starts with" hit on the first token) AND
+     *            that entity has exactly one open transaction matching the
+     *            exact bank amount.
+     *            → score 65, hasVariance false
+     *
+     * Tier 4b – Tier 4 payee lookup succeeds and the entity has exactly one
+     *            open transaction within the configured tolerance window.
+     *            → score 60, hasVariance true, varianceAmt = abs(diff)
+     *
+     * @param {Object} bankTxn   { date, amount, description, reference, payee }
      * @param {Object} settings  { toleranceAmt, toleranceDays, subsidiary }
      * @returns {Object|null}
      *   On match:  { candidate, tier, hasVariance, varianceAmt, score, matchReason }
@@ -305,14 +434,19 @@ define([
         }
 
         // ── TIER 3: Entity name + single matching amount ──────────────────────
-        // Group by entityId those candidates whose entity name appears in the
-        // sanitized memo AND whose amount exactly matches the bank amount.
+        // Use BOTH plain-substring match AND token-based match (each token from
+        // the NS entity name appears in the cleaned bank text, order-independent).
+        // Token matching catches "Acme Ltd" in NS vs "ACME LIMITED PAYMENT" on
+        // the bank line where substring `indexOf('acme ltd')` would fail.
         var entityBuckets = {};
         for (i = 0; i < candidates.length; i++) {
             c = candidates[i];
-            var entityName = String(c.entity || '').toLowerCase().trim();
-            if (entityName.length < 3) continue;
-            if (cleanText.indexOf(entityName) < 0) continue;       // entity not in memo
+            var entityRaw   = String(c.entity || '').trim();
+            if (entityRaw.length < 3) continue;
+            var entityClean = sanitizeMemo(entityRaw);
+            var substrHit   = entityClean.length >= 3 && cleanText.indexOf(entityClean) >= 0;
+            var tokenHit    = !substrHit && _allTokensMatch(entityRaw, cleanText);
+            if (!substrHit && !tokenHit) continue;
             if (Math.abs(c.amount - bankAmt) > 0.005) continue;    // amount must be exact
 
             var bucketKey = c.entityId || c.entity;
@@ -324,7 +458,6 @@ define([
         for (var ei = 0; ei < eKeys.length; ei++) {
             var bucket = entityBuckets[eKeys[ei]];
             if (bucket.length === 1) {
-                // Exactly one open transaction for this entity at this amount → safe
                 return {
                     candidate:   bucket[0],
                     tier:        3,
@@ -334,6 +467,62 @@ define([
                     matchReason: 'Tier 3: Entity "' + bucket[0].entity +
                                  '" in bank text + single open transaction at exact amount'
                 };
+            }
+        }
+
+        // ── TIER 4: Payee → entity lookup + single matching amount ────────────
+        // If the bank line carries a structured `payee` field (OFX/QFX), use it
+        // to look up the customer/vendor directly. This is the strongest signal
+        // available and handles cases where the memo is empty or noisy.
+        var payee = String(bankTxn.payee || '').trim();
+        if (payee.length >= 3) {
+            var lookupType = isCredit ? 'customer' : 'vendor';
+            var entityId   = _findEntityByPayee(payee, lookupType, settings.subsidiary);
+            if (entityId) {
+                // Find candidates for this entity at the exact bank amount
+                var entityHits = [];
+                for (i = 0; i < candidates.length; i++) {
+                    c = candidates[i];
+                    if (String(c.entityId) !== String(entityId)) continue;
+                    if (Math.abs(c.amount - bankAmt) > 0.005) continue;
+                    entityHits.push(c);
+                }
+                if (entityHits.length === 1) {
+                    return {
+                        candidate:   entityHits[0],
+                        tier:        4,
+                        hasVariance: false,
+                        varianceAmt: 0,
+                        score:       65,
+                        matchReason: 'Tier 4: Bank payee "' + payee +
+                                     '" resolved to ' + lookupType +
+                                     ' ' + (entityHits[0].entity || entityId) +
+                                     ' + single open transaction at exact amount'
+                    };
+                }
+                // Tier 4b: payee lookup + within-tolerance amount (variance)
+                if (tolAmt > 0 && entityHits.length === 0) {
+                    var nearHits = [];
+                    for (i = 0; i < candidates.length; i++) {
+                        c = candidates[i];
+                        if (String(c.entityId) !== String(entityId)) continue;
+                        var d = Math.abs(c.amount - bankAmt);
+                        if (d > 0 && d <= tolAmt) nearHits.push({ c: c, diff: d });
+                    }
+                    if (nearHits.length === 1) {
+                        return {
+                            candidate:   nearHits[0].c,
+                            tier:        4,
+                            hasVariance: true,
+                            varianceAmt: nearHits[0].diff,
+                            score:       60,
+                            matchReason: 'Tier 4 (Match with Variance ' +
+                                         nearHits[0].diff.toFixed(2) + '): payee "' +
+                                         payee + '" resolved to ' + lookupType +
+                                         ', amount differs by ' + nearHits[0].diff.toFixed(2)
+                        };
+                    }
+                }
             }
         }
 
