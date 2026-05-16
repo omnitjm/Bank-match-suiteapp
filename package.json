@@ -7,7 +7,8 @@
     "deploy:no-prompt": "suitecloud project:deploy --no-preview",
     "validate": "suitecloud project:validate",
     "lint": "eslint FileCabinet/SuiteScripts/BankMatch/**/*.js",
-    "setup": "suitecloud account:setup --authid bank-match-auth"
+    "setup": "suitecloud account:setup --authid bank-match-auth",
+    "test": "node tests/run.js"
   },
   "devDependencies": {
     "@oracle/suitecloud-cli": "^1.8.0",
